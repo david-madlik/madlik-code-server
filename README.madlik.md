@@ -76,12 +76,14 @@ náročné kontroly spouštěj postupně a s limitem paměti.
 ## Git
 
 - Pracovní větev: `madlik/main`.
+- Veřejný fork / remote `origin`: https://github.com/david-madlik/madlik-code-server.git.
 - Remote `upstream`: https://github.com/coder/code-server.git.
 - Výchozí release: `madlik/upstream.json`.
-- Vlastní vzdálený repozitář (`origin`) zatím není vytvořený.
-- Počáteční clone je mělký; před rebase starší historie použij `git fetch --unshallow upstream`.
+- Místní repozitář má načtenou historii upstreamu. U mělkého klonu ji před rebase
+  doplň pomocí `git fetch --unshallow --no-recurse-submodules --no-tags upstream tag v4.141.0`.
 
-Mobilní změny budou samostatný patch v upstream systému `patches/series`.
+Mobilní změny jsou samostatný patch v upstream systému `patches/series`.
+Upravený VS Code submodule se samostatně nepushuje; přenos změn zajišťuje quilt patch.
 Neupravujeme soubory nainstalovaného `/usr/lib/code-server` ani generované bundle soubory.
 Původní upstream dokumentace je v [docs/README.md](docs/README.md) a [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
