@@ -1,96 +1,124 @@
-# Mobilní integrace
+# Mobile workbench architecture
 
-## Rozhodnutí
+## Integration boundary
 
-Integrace do zdrojového workbenche přes quilt patch, ne vkládání skriptu přes proxy.
-TypeScript komponenta a její styly se sestaví společně s VS Code. Tím nepotřebujeme
-oslabovat CSP ani veřejný most mezi stránkou a Extension Hostem.
-Interní workbench služby jsou v této variantě záměrná závislost vlastního forku;
-nepředstíráme, že jde o stabilní veřejné Extension API.
+The mobile UI is compiled into the existing VS Code workbench through
+`patches/madlik-mobile.diff`, after code-server's upstream quilt patches. It uses
+internal workbench services deliberately; it is not a portable extension API.
+No proxy script injection, runtime edits to installed bundles, CSP weakening or
+replacement Explorer/Git/editor/terminal is used.
 
-## Cílové chování
+The tested baseline is code-server 4.141.0 / VS Code 1.141.0. Review internal APIs
+and rerun the UI tests when upgrading.
 
-- Režim `auto | on | off`, výchozí auto s hranicí viewportu 768 CSS px.
-- Detekce skutečného okna pomocí matchMedia, včetně změny orientace.
-- Stav mobilního režimu patří klientskému oknu. Nepoužívat serverové preference,
-  společná workspace settings ani sdílený uložený layout pro mobilní přepínání.
-- Nad hranicí nepřidávat navigaci ani měnit desktopové rozložení.
-- Spodní navigace Soubory / Git / Editor / Terminál, aktivní část zvýrazněná.
-- Používat workbench layout a view služby, zachovat původní komponenty a jejich stav.
-- Při otevření souboru nebo diffu přejít na Editor; sledovat skutečné otevření,
-  nikoli pouhou existenci dříve otevřeného editoru při přepnutí režimu.
-- Terminál pouze skrývat; nikdy ho při přepínání dispose/kill.
-- Respektovat safe-area-inset-bottom a dostupnou výšku při zobrazené klávesnici.
-- Uložit předchozí rozložení v paměti klientského okna a při deaktivaci obnovit.
-- Mobilní override nesmí přepsat perzistentní desktopový layout. Zvlášť prověřit
-  persistenci layout service a sdílení mezi dvěma klienty stejného workspace.
+## Layout and client isolation
 
-## Implementační kroky
+`MadlikMobile` uses `matchMedia('(max-width: 768px)')`, resize and visualViewport
+events. Mobile mode and its section, keyboard provider and typing state live in
+memory for the current browser window. `auto | on | off` commands remain in the
+command palette; the navigation contains only Explorer/Git/Editor/Terminal and
+the grouped keyboard control.
 
-1. Připravit VS Code submodule a prostudovat layout/storage služby konkrétního commitu.
-2. Přidat malou workbench contribution: detekce, stav a přístupná navigace.
-3. Integrovat čtyři režimy do layoutu bez přesouvání DOM elementů pomocí selektorů.
-   Maximalizace primárního sidebaru bude potřebovat vlastní layoutovou úpravu.
-4. Oddělit dočasný mobilní layout od ukládání standardního rozložení.
-5. Exportovat změny do samostatného patche v patches/series.
-6. Build a Playwright na izolované instanci, potom balíček/distribuce.
+The layout service maximizes the selected native sidebar, editor or panel and
+reserves the measured navigation/keyboard height. A snapshot retains desktop view
+visibility, sizes and hidden-view caches; desktop sizes recorded before narrowing
+are preferred over mobile grid sizes. Mobile changes do not persist mobile view
+sizes or the active mobile container as desktop preferences. Restoration is queued
+and generation-guarded against stale section switches.
 
-První implementace používá přímo viditelnost existujících grid views. Snapshot
-ukládá viditelnost, rozměry i cache skrytých panelů; editor při návratu absorbuje
-zbývající prostor. Poslední desktopové šířky se uchovávají před zúžením okna.
-Zápis mobilních rozměrů a posledního aktivního view containeru do desktopových
-preferencí je potlačen. Změny rozložení nevolají konfiguraci ani nepřesouvají DOM.
-Stav ověření a zbývající limity jsou v [TESTING.md](TESTING.md).
+File/diff opening switches Explorer or Git to Editor through editor service events.
+Terminals are hidden between sections and are never killed by a section switch.
 
-## Testovací plán
+## Focus and device keyboard
 
-Izolovaná instance: vlastní config, user-data-dir, extensions-dir, dočasný Git workspace
-a pouze loopback listener na volném portu. Nepoužívat pracovní repozitáře ani běžící server.
+`base/browser/mobileKeyboard.ts` maintains a WeakMap per Window. Native InputBox,
+Monaco textarea/NativeEditContext and xterm inputs register themselves on creation
+and unregister on disposal. Browsing sets `inputmode=none` and rejects text focus;
+inputmode alone is not a reliable keyboard suppression mechanism on iOS. The last
+attempted input target is remembered.
 
-Playwright scénáře:
+The grouped footer has the **Code/Native switch on the left and ⌨ on the right**.
+The switch exposes `role=switch` and `aria-checked=true` for Native. ⌨ opens/closes
+the selected keyboard. Changing provider while closed only selects a provider.
+Native focus is restored synchronously during a user gesture. Touchend handles
+provider switching, with compatibility-click deduplication; pointerdown preserves
+the current input even when the target is a nested label/track span.
 
-- 390 × 844 a 375 × 667: všechny čtyři režimy, rozměry a ovladatelnost navigace.
-- 1440 × 900: žádná mobilní navigace ani změny desktopového layoutu.
-- Přechod přes hranici 768 px a otočení telefonu, opakovaně.
-- Explorer: otevření souboru a přechod na editor.
-- Source Control: stage/unstage a diff na dočasném repozitáři.
-- Terminál: interaktivní proces přežije opakované přepínání, návrat do stejné relace.
-- Dvě klientská okna stejného workspace: mobilní změny neovlivní desktop,
-  včetně obnovy stránky a opětovného připojení.
-- Vypnutí mobilního režimu obnoví původní rozložení bez změny uživatelských nastavení.
-- CSP bez oslabení; bez injekce přes proxy nebo úprav systémové instalace.
+Switching sections returns to browsing. Leaving mobile restores original inputmode
+attributes and native focus behavior. The indicator represents our typing state;
+it cannot reliably observe the OS keyboard being dismissed independently. Extension
+iframes/webviews are not included in the focus gate.
 
-Playwright není plnohodnotnou náhradou ověření iOS klávesnice a interaktivního Codex CLI
-na skutečném iPhonu. Finální dotykové a klávesnicové chování ověřit také na zařízení.
+## Code keyboard
 
-## Řízení mobilní klávesnice
+`MobileCodeKeyboard` wraps locally vendored simple-keyboard 3.8.194 (MIT), with ABC,
+123, symbol and Fn layers, Ctrl/Alt latches and Shift. It initializes lazily on first
+open. Leaving mobile destroys it and restores the previous `document.onpointerup`.
+The vendored license/provenance and exact bundle SHA are recorded next to the source.
+Four `innerHTML` assignments are replaced with `textContent`; labels are plain text,
+so no Trusted Types policy or CSP exception is required. There is no runtime CDN
+or speech API.
 
-Sdílený `base/browser/mobileKeyboard.ts` drží stav ve WeakMap podle okna.
-Nativní InputBox, oba editorové vstupy (textarea i NativeEditContext) a xterm
-registrují vlastní vstup přímo při vytvoření, s odregistrováním při dispose.
-Neprohledáváme DOM a nezasahujeme do readonly stavu editoru nebo terminálu.
-Prohlížení nastaví `inputmode=none` a synchronně odmítne textový fokus, protože
-samotný inputmode není na všech prohlížečích závazný. Poslední pokus o zaměření
-se pamatuje; tlačítko klávesnice obnoví atribut a focus synchronně v uživatelském
-gestu, což Safari potřebuje pro otevření softwarové klávesnice.
-Přepnutí části vrací prohlížení. Deaktivace mobilu obnoví původní atributy
-vstupů a standardní fokusování; stav se neukládá ani nesdílí s desktopem.
-Klávesnice operačního systému nemá spolehlivé webové API pro zjištění otevření:
-indikátor znamená povolené psaní. Vlastní iframe/webview vstupy nejsou pokryté.
+Printable keys, space and deletion use the library's 500 ms delay / 100 ms repeat.
+A modifier snapshot is retained for the held key so Ctrl/Alt combinations do not
+turn into plain letters during repeat. Capture release/cancel/blur listeners and
+hide/deactivate stop holding, including after a shifted-layout rerender.
+Navigation and key labels explicitly disable selection and touch callouts; this
+scope excludes terminal text selection and the paste dialog.
 
-## Kompatibilita dotykového scrollování xterm
+Input routing uses the last visible registered input, native Monaco commands or
+terminal services. Terminal targeting matches the remembered public xterm textarea
+against terminal instances, falling back to activeInstance. `terminalCodeKey`
+encodes printable/control text, application cursor mode, modifiers and F1–F12.
+The terminal helper row participates in modifier routing while Code is open.
 
-Závislost `@xterm/xterm` 6.1.0-beta.304 vytváří při inerciální fázi dotykového
-scrollování události CHANGE bez clientX/clientY. Při zapnutém mouse reportingu
-(SGR, např. Codex CLI) se souřadnice změní na NaN a poškodí vstup aplikace.
-`terminalTouchCoordinates.ts` registruje capture listenery přímo na nativním
-terminálovém elementu. Pamatuje poslední platnou polohu každého gesta, doplní ji
-při inercii a zahodí gesto bez použitelné polohy. Existující platné souřadnice
-se zachovají. Umožňuje dál scrollovat uvnitř aplikace i s vypnutým psaním.
+Editor support uses Monaco typing/deletion/cursor commands and explicit common
+Ctrl and default function-key commands. Arbitrary user keybindings and extension
+webview inputs are not hardware-keyboard emulation; Native remains available.
+Ordinary input fields use `setRangeText` and their normal input event.
 
-Jde o dočasný adaptér na **interní** události `-xterm-gesturestart/change`,
-nikoli veřejné xterm API. Při aktualizaci xterm ověřit jejich názvy a odstranit
-adaptér, až opravu zajistí upstream. Neopravujeme node_modules ani distribuční
-soubory; adaptér se sestaví ze zdrojů společně s workbenchem.
-Regresní test používá raw-mode Python fixture s mouse reportingem v izolovaném
-náhledu, skutečná dotyková gesta přes CDP i explicitní událost bez souřadnic.
+## Terminal selection and clipboard
+
+`TerminalTouchSelection` attaches to each opened xterm. A 450 ms hold selects a
+word through public buffer/select APIs; xterm's renderer draws the selection.
+Two touch handles adjust it, selecting the nearest handle when hit areas overlap.
+Touch selection/clipboard controls do not emit mouse input into the TUI. Moving
+more than 10 px becomes scrolling with a short inertia phase; a short unselected
+tap is replayed through xterm mouse handling. Mobile sticky command headers are
+hidden because their overlay intercepts selection gestures.
+
+Copy prefers a synchronous native copy event with a scoped clipboard payload,
+then falls back to Clipboard API. On success it closes the menu and clears the
+selection; failure retains the selection and reports an error. Clipboard controls
+handle real touch gestures rather than relying on compatibility clicks after a drag.
+
+Paste opens a native HTML dialog attached outside xterm. Its ordinary textarea
+supports the browser's own Paste action and native keyboard. Only **Paste into
+terminal** sends the reviewed value through public `raw.paste`; Cancel/Escape sends
+nothing. The field is cleared on reopening. No automatic `clipboard.readText`,
+clipboard polling or simulated Shift+Insert is used. xterm handles bracketed paste
+and line endings without an extra Enter. The dialog is outside the terminal to
+avoid terminal focus, gesture and context-menu interception.
+
+## xterm scroll compatibility
+
+The pinned `@xterm/xterm` 6.1.0-beta.304 emits inertia CHANGE events without
+clientX/clientY. Under SGR mouse reporting this can send NaN coordinates into
+interactive TUI input. `terminalTouchCoordinates.ts` captures the terminal's
+**internal** `-xterm-gesturestart/change` events, retains valid coordinates and
+rejects positionless gestures. The selection adapter also supplies valid coordinates
+when forwarding scroll gestures. These event names are update-sensitive; remove
+the workaround if upstream fixes it. No dependency distribution file is patched.
+
+## Font scaling and theme
+
+Window-local MobileFontScale applies a factor of 0.75 to native editor and terminal
+font metrics and triggers layout recalculation. MobileFonts derives scoped font CSS
+from loaded workbench stylesheets through CSSOM: absolute font sizes are scaled,
+relative sizes inherit the smaller base. User settings and original stylesheets
+are unchanged. Extension iframes/webviews and arbitrary extension inline fonts are
+not universally covered. Leaving mobile restores the original metrics.
+
+Code keyboard colors use live VS Code theme variables. Key geometry is separate
+from font scaling: navigation retains touch-sized controls and Code uses compact
+38 px keys. Layout tracks visualViewport and safe-area insets for device keyboards.

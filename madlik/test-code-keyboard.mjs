@@ -1,0 +1,76 @@
+import { chromium } from '../lib/vscode/node_modules/playwright/index.mjs';
+import { expect } from '../lib/vscode/node_modules/@playwright/test/index.mjs';
+import { readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+const cache=path.resolve('.madlik'), workspace=path.join(cache,'workspace');
+const settingsFile=path.join(cache,'user-data/User/settings.json'), previousSettings=await readFile(settingsFile,'utf8');
+const browser=await chromium.launch({headless:true});let page,prefix;const errors=[],results=[];
+try {
+ const context=await browser.newContext({viewport:{width:390,height:844},hasTouch:true,isMobile:true});page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('http://127.0.0.1:18110/?folder='+encodeURIComponent(workspace));
+ await page.locator('[data-section="terminal"]').tap();
+ const input=page.locator('.terminal-wrapper.active:visible .xterm-helper-textarea').first();await input.waitFor({state:'attached',timeout:30000});await input.focus();
+ const provider=page.locator('[data-action="keyboard-provider"]'),toggle=page.locator('[data-action="keyboard"]'),code=page.locator('.madlik-code-keyboard');
+ await expect(provider).toHaveText('Code');await expect(provider).toHaveAttribute('role','switch');await expect(provider).toHaveAttribute('aria-checked','false');await expect(page.getByRole('group',{name:'Keyboard controls'})).toBeVisible();await toggle.tap();await expect(code).toBeVisible();await expect(input).toHaveAttribute('inputmode','none');
+ await provider.tap();await expect(provider).toHaveText('Native');await expect(provider).toHaveAttribute('aria-checked','true');await expect(code).toBeHidden();await expect(input).toBeFocused();
+ prefix=path.join(cache,`code-input-${Date.now()}`);const fixture=path.join(cache,'code-input.py');
+ await writeFile(fixture,`import sys,os,tty,termios,select,time\nfd=sys.stdin.fileno();previous=termios.tcgetattr(fd)\ntry:\n tty.setraw(fd)\n open(sys.argv[1]+'.ready','w').close()\n with open(sys.argv[1]+'.bin','wb') as out:\n  until=time.monotonic()+120\n  while time.monotonic()<until and not os.path.exists(sys.argv[1]+'.stop'):\n   if select.select([fd],[],[],0.1)[0]:out.write(os.read(fd,65536));out.flush()\nfinally:\n termios.tcsetattr(fd,termios.TCSADRAIN,previous)\n open(sys.argv[1]+'.done','w').close()\n`);
+ await page.keyboard.press('Control+u');await page.keyboard.type(`python3 '${fixture}' '${prefix}'`);await page.keyboard.press('Enter');
+ await expect.poll(async()=>{try{await readFile(prefix+'.ready');return true}catch{return false}}).toBe(true);
+ await provider.tap();await expect(code).toBeVisible();await expect(input).toHaveAttribute('inputmode','none');
+ const key=name=>code.locator('[data-skbtn]').filter({has:page.locator('span')}).and(code.locator(`[data-skbtn=${JSON.stringify(name)}]`));
+ const press=async name=>{await key(name).tap()};const layer=async name=>{await code.locator(`[data-code-layer="${name}"]`).tap();await expect(code.locator(`[data-code-layer="${name}"]`)).toHaveAttribute('aria-pressed','true')};
+ await press('q');await press('{shift}');await press('A');await press('{bksp}');await press('{space}');
+ await layer('numbers');await press('1');await layer('symbols');await press('{');await press('|');
+ await layer('abc');await layer('ctrl');await press('c');await layer('alt');await press('x');
+ await layer('fn');await press('{f1}');await press('{f12}');await press('{shift}');await press('{f5}');await press('{shift}');await layer('ctrl');await page.getByRole('button',{name:'←',exact:true}).tap();
+ await expect.poll(()=>readFile(prefix+'.bin','utf8')).toBe('qA\x7f 1{|\x03\x1bx\x1bOP\x1b[24~\x1b[15;2~\x1b[1;5D');
+ results.push('Real touch input: ABC, one-shot Shift, Backspace, space, numbers, braces, pipe, Ctrl+C, Alt+x, F1/F12, Shift+F5 and Ctrl+Left reach the PTY exactly');
+ expect(await input.evaluate(el=>document.activeElement===el)).toBe(false);
+ await expect(code.locator('[data-code-layer="ctrl"]')).toHaveAttribute('aria-pressed','false');await expect(code.locator('[data-code-layer="alt"]')).toHaveAttribute('aria-pressed','false');
+ await layer('abc');
+ const cdp=await context.newCDPSession(page);
+ async function held(name){const box=await key(name).boundingBox();await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:box.x+box.width/2,y:box.y+box.height/2}]});await page.waitForTimeout(950);await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await page.waitForTimeout(100)}
+ const beforeHold=await readFile(prefix+'.bin','utf8');await held('{bksp}');
+ const afterHold=await readFile(prefix+'.bin','utf8');expect(afterHold.slice(beforeHold.length)).toMatch(/^\x7f{3,}$/);
+ await page.waitForTimeout(250);expect(await readFile(prefix+'.bin','utf8')).toBe(afterHold);
+ await layer('ctrl');await held('c');const afterCtrlHold=await readFile(prefix+'.bin','utf8');expect(afterCtrlHold.slice(afterHold.length)).toMatch(/^\x03{3,}$/);
+ await press('c');await expect.poll(()=>readFile(prefix+'.bin','utf8')).toBe(afterCtrlHold+'c');
+ expect(await key('c').locator('span').evaluate(el=>getComputedStyle(el).userSelect)).toBe('none');
+ expect(await page.evaluate(()=>window.getSelection()?.toString())).toBe('');
+ await cdp.detach();results.push('Hold repeats Backspace and Ctrl+C, stops on release, consumes Ctrl after release and never selects key labels');
+ const darkColor=await key('q').evaluate(el=>getComputedStyle(el).backgroundColor);
+ async function theme(name){
+  await page.setViewportSize({width:1440,height:900});
+  await expect(page.locator('.madlik-mobile-navigation')).toBeHidden();
+  await page.keyboard.press('Control+k');await page.keyboard.press('Control+t');
+  const picker=page.locator('.quick-input-widget input').first();
+  await expect(picker).toHaveAttribute('placeholder',/Select Color Theme/);
+  await picker.fill(name);await page.locator('.quick-input-list').getByText(name,{exact:true}).first().click();
+  await expect(picker).toBeHidden();
+  await page.setViewportSize({width:390,height:844});
+  await page.locator('[data-section="terminal"]').tap();await input.focus();
+  await toggle.tap();await expect(code).toBeVisible();
+ }
+ await theme('Light Modern');
+ await expect(page.locator('.monaco-workbench')).toHaveClass(/(?:^|\s)vs(?:\s|$)/,{timeout:30000});
+ await expect.poll(()=>key('q').evaluate(el=>getComputedStyle(el).backgroundColor)).not.toBe(darkColor);
+ await page.screenshot({path:path.join(cache,'screenshots/code-keyboard-light.png')});
+ await theme('Dark Modern');await expect(page.locator('.monaco-workbench')).toHaveClass(/vs-dark/,{timeout:30000});
+ await page.setViewportSize({width:375,height:667});await expect(page.locator('.madlik-mobile-navigation')).toBeInViewport({ratio:1});await expect(code).toBeInViewport({ratio:1});
+ await page.screenshot({path:path.join(cache,'screenshots/code-keyboard-375.png')});
+ results.push('Grouped keyboard switch, restored Alt, Native/Code switch, native focus restoration, no native focus in Code mode, light/dark theme update and 375x667 fit OK');
+ await writeFile(prefix+'.stop','');await expect.poll(async()=>{try{await readFile(prefix+'.done');return true}catch{return false}}).toBe(true);
+ await page.locator('[data-section="files"]').tap();await expect(code).toBeHidden();
+ await page.locator('.explorer-folders-view').getByText('hello.ts',{exact:true}).dblclick();await expect(page.locator('[data-section="editor"]')).toHaveAttribute('aria-pressed','true');
+ const editor=page.locator('.monaco-editor').filter({has:page.locator('.view-lines')}).first();
+ const editInput=editor.locator('.native-edit-context,textarea.inputarea').first();await editInput.focus();
+ await toggle.tap();await expect(code).toBeVisible();await layer('fn');await press('{home}');await layer('abc');await press('q');
+ await expect(editor.locator('.view-lines')).toContainText('qexport');
+ await press('{bksp}');await expect(editor.locator('.view-lines')).not.toContainText('qexport');
+ results.push('Code keyboard edits the native Monaco editor and Backspace undoes the insertion');
+ await page.setViewportSize({width:1440,height:900});await expect(page.locator('.madlik-mobile-navigation')).toBeHidden();await expect(code).toBeHidden();await expect(editInput).not.toHaveAttribute('inputmode','none');
+ results.push('Desktop resize removes the Code keyboard and restores native input mode');
+ expect(errors).toEqual([]);console.log(results.join('\n'));await writeFile(path.join(cache,'test-code-keyboard-results.json'),JSON.stringify({results,errors},null,2));
+}catch(error){if(page)await page.screenshot({path:path.join(cache,'screenshots/code-keyboard-failure.png')}).catch(()=>{});console.log('Page errors:',errors);if(page)console.log(await page.evaluate(()=>({body:document.body.className,workbench:document.querySelector('.monaco-workbench')?.className,inputColor:getComputedStyle(document.querySelector('.monaco-workbench')).getPropertyValue('--vscode-input-background')})));throw error}
+finally{if(prefix){await writeFile(prefix+'.stop','');await expect.poll(async()=>{try{await readFile(prefix+'.done');return true}catch{return false}}).toBe(true).catch(()=>{})}await writeFile(settingsFile,previousSettings);await browser.close()}

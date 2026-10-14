@@ -1,42 +1,37 @@
-# madlik-code-server
+# Development and isolated preview
 
-Vlastní distribuce code-serveru s mobilním rozhraním **madlik-mobile**.
-Používá existující Explorer, Source Control, editor, diff editor a terminál VS Code.
-Projekt není nový editor ani samostatná univerzální VS Code extension.
+madlik-code-server is a code-server distribution with a source-level mobile
+workbench patch. User-facing controls are described in the [main README](README.md).
+The baseline is pinned in [madlik/upstream.json](madlik/upstream.json):
+code-server 4.141.0, VS Code 1.141.0.
 
-## Aktuální stav
+## Source layout
 
-Repozitář je založený na upstream release **v4.141.0**, stejném jako pracovní instance na VPS.
-První mobilní integrace je v [patches/madlik-mobile.diff](patches/madlik-mobile.diff).
-Používá skutečnou šířku okna, nativní workbench služby a dočasné rozložení bez změn nastavení.
-Testovací build používá samostatnou kopii distribuce na localhostu; není to produkční vydání.
-Na tomto VPS byl fork na výslovné zadání nasazen místo původního editoru;
-podrobnosti a rollback jsou v [madlik/DEPLOYMENT.md](madlik/DEPLOYMENT.md).
-Systémový balíček, přístupové údaje a síťová konfigurace zůstávají nedotčené.
+- Branch: `madlik/main`.
+- `origin`: <https://github.com/david-madlik/madlik-code-server.git>.
+- `upstream`: <https://github.com/coder/code-server.git>.
+- `patches/madlik-mobile.diff`: all mobile VS Code source, styles and vendored
+  keyboard files, applied after the upstream patches in `patches/series`.
+- `lib/vscode`: the original pinned submodule. Its working tree is intentionally
+  modified while quilt patches are applied; do not commit that working tree or
+  change its gitlink to publish mobile changes.
+- `.madlik/`: ignored bundles, preview distribution, config/data, test workspace,
+  fixtures, logs and screenshots. Do not publish its contents or credentials.
 
-## Ovládání
+Edit patched source files, use `quilt add` for new files, and run `quilt refresh`.
+Review and commit the resulting patch in the root repository. Do not edit installed
+`/usr/lib/code-server` files or generated bundles. For a shallow upstream checkout,
+fetch the needed upstream history before rebasing.
 
-- Automatická aktivace při šířce ≤ 768 CSS px, reakce na resize a orientaci.
-- Spodní navigace: Soubory / Git / Editor / Terminál.
-- Soubory a Git používají původní sidebar přes celou pracovní plochu.
-- Otevření souboru nebo diffu přepne na Editor.
-- Terminál se při přepínání neruší. Pomocná řada nabízí Ctrl+C, Esc, Tab, šipky a úplně vpravo Enter.
-- Tlačítko `⌨` je stále ve spodní navigaci. Zapne psaní a zaměří poslední textové pole;
-  dalším klepnutím klávesnici zavře. Aktivní psaní je zvýrazněné.
-- Mobil začíná v režimu prohlížení: dotyk editoru, běžných vstupů workbenche nebo
-  terminálu neudrží textový fokus. Nejprve klepni na pole a pak na `⌨`.
-  Při přechodu mezi částmi se psaní znovu vypne, aby šlo obsah procházet bez klávesnice.
-  Terminálová pomocná tlačítka fungují i se zavřenou klávesnicí.
-- Přepínač řídí povolení textového fokusu, ne systémovou klávesnici přímo. Skrytí
-  klávesnice systémovým tlačítkem se nemusí odrazit ve zvýraznění; vlastní webview
-  rozšíření nejsou tímto řízením pokryté. Skutečné iOS chování je nutné ověřit na telefonu.
-- Tlačítko `⋯` nabízí automatický režim, ruční zapnutí/vypnutí a paletu příkazů.
-- V paletě jsou příkazy `Madlik Mobile: Automaticky`, `Zapnout` a `Vypnout`.
-- Ruční volba platí pro aktuální okno do obnovení stránky; neukládá se jako společné nastavení.
+## Preview prerequisites
 
-## Izolovaný náhled
+The current preview workflow targets Debian/Linux with Node.js 24, npm, Git,
+quilt and a user systemd session. It stages from an installed **code-server 4.141.0**
+distribution, normally `/usr/lib/code-server`; set `MADLIK_BASE_DISTRIBUTION` to
+another compatible distribution directory if needed. Build dependencies must be
+installed before running the preview scripts.
 
-Po inicializaci submodulu a aplikaci patchů potřebuje preview Node.js 24 a závislosti:
+For a fresh checkout:
 
 ```sh
 git submodule update --init --depth 1
@@ -48,74 +43,79 @@ bash madlik/build-preview.sh
 bash madlik/start-preview.sh
 ```
 
-Preview vyžaduje instalovanou základní distribuci **4.141.0** v `/usr/lib/code-server`,
-případně cestu v `MADLIK_BASE_DISTRIBUTION`. Všechny úpravy sestaveného kódu se provádějí
-jen v `.madlik/runtime`. Preview používá vlastní config, data, sdílené úložiště,
-extensions-dir a testovací Git workspace. Poslouchá pouze na **127.0.0.1:18110**.
+Do not reapply patches to an already patched checkout; inspect `quilt applied`.
+The preview workflow reuses native runtime dependencies from the baseline
+installation. For a complete distribution build, follow the upstream
+[contributing guide](docs/CONTRIBUTING.md); no portable release package is provided yet.
 
-Build se spouští pod limitem 4 GiB RAM přes uživatelský systemd; požaduje alespoň
-6 GiB dostupné paměti včetně rezervy. Současně nespouštět další kompilace.
-Náhled je anglický upstream workbench s českou mobilní navigací, sestavený bez NLS
-optimalizace. Úplné distribuční balení a lokalizované produkční vydání jsou další krok.
+The build runs with a 4 GiB memory cap via user systemd and requires at least 6 GiB
+available RAM, including reserve. Do not run another compiler/typechecker alongside
+it. The preview is an unlocalized server-web bundle with English mobile controls.
 
-Pro přístup z počítače lze vytvořit SSH tunel (bez změn serverové konfigurace):
+`build-preview.sh` stages into `.madlik/runtime` and assigns a build identity derived
+from the baseline and mobile patch to both server and browser products. It also
+copies `LICENSE.simple-keyboard`. `start-preview.sh` uses only isolated data:
+
+| Resource | Location |
+| --- | --- |
+| Listener | `127.0.0.1:18110` |
+| Config | `.madlik/config.yaml` |
+| User data | `.madlik/user-data` |
+| Shared data | `.madlik/shared` |
+| Extensions | `.madlik/extensions` |
+| Test Git workspace | `.madlik/workspace` |
+
+Workspace trust is disabled only for this isolated fixture instance. Production
+configuration, working projects, authentication and network services are not changed
+by these scripts. The preview has no authentication and must remain on loopback.
+
+To access it from another computer without exposing a port publicly:
 
 ```sh
 ssh -N -L 18110:127.0.0.1:18110 user@your-server
 ```
 
-Potom otevřít `http://localhost:18110`. Server není vystaven veřejně ani přes Caddy.
-Pokud náhled běží jako dočasná služba `madlik-mobile-preview`, zastaví se příkazem
-`sudo systemctl stop madlik-mobile-preview`. Systémový `code-server@david` se tím nemění.
+Open `http://localhost:18110`. If the preview was started as the transient service
+`madlik-mobile-preview`, stop it with `sudo systemctl stop madlik-mobile-preview`.
+A plain `start-preview.sh` process is stopped with Ctrl+C.
 
-## Prohlížečové kontroly
+## Tests
+
+After starting the isolated preview:
 
 ```sh
 node lib/vscode/node_modules/playwright/cli.js install chromium
 node madlik/test-mobile.mjs
 node madlik/test-terminal-touch.mjs
+node madlik/test-clipboard.mjs
+node madlik/test-code-keyboard.mjs
 ```
 
-Test běží pouze proti náhledu na localhostu a jeho fixture repozitáři. Výsledky a snímky
-ukládá do `.madlik/`. Skutečný iPhone, softwarová klávesnice a interaktivní Codex
-vyžadují následné ověření na zařízení. Úspěšný browser test není potvrzením těchto vlastností.
-Rozsah již provedeného ověření je v [madlik/TESTING.md](madlik/TESTING.md).
-Pro cílenou typovou kontrolu použij `lib/vscode/node_modules/.bin/tsc -p madlik/tsconfig.json --noEmit --skipLibCheck`;
-náročné kontroly spouštěj postupně a s limitem paměti.
+Run suites sequentially. For repeatable raw PTY/clipboard tests, stop the preview,
+archive its `.madlik/user-data` and `.madlik/shared` directories, and start with a
+fresh isolated profile rather than restoring terminals from earlier browser contexts.
+Preserve `User/settings.json` in the new profile. Never reset production user data.
+See [TESTING.md](madlik/TESTING.md) for coverage, artifacts and device limitations.
 
-## Git
+The focused typecheck is:
 
-- Pracovní větev: `madlik/main`.
-- Veřejný fork / remote `origin`: https://github.com/david-madlik/madlik-code-server.git.
-- Remote `upstream`: https://github.com/coder/code-server.git.
-- Výchozí release: `madlik/upstream.json`.
-- Místní repozitář má načtenou historii upstreamu. U mělkého klonu ji před rebase
-  doplň pomocí `git fetch --unshallow --no-recurse-submodules --no-tags upstream tag v4.141.0`.
+```sh
+lib/vscode/node_modules/.bin/tsc -p madlik/tsconfig.json --noEmit --skipLibCheck
+```
 
-Mobilní změny jsou samostatný patch v upstream systému `patches/series`.
-Upravený VS Code submodule se samostatně nepushuje; přenos změn zajišťuje quilt patch.
-Neupravujeme soubory nainstalovaného `/usr/lib/code-server` ani generované bundle soubory.
-Původní upstream dokumentace je v [docs/README.md](docs/README.md) a [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
+Run it separately from the build, with a 4 GiB process/service memory cap. It checks
+the changed production modules and their dependencies, not the entire upstream test tree.
 
-## Návrh a vývoj
+## Updates and deployment
 
-Viz [madlik/ARCHITECTURE.md](madlik/ARCHITECTURE.md).
+1. Select and fetch a concrete upstream release.
+2. Integrate upstream changes and update its pinned VS Code submodule.
+3. Reapply/rebase the quilt stack, especially the mobile workbench patch.
+4. Review workbench internals and xterm gesture compatibility.
+5. Build an isolated distribution and run the browser suites, including simultaneous
+   mobile/desktop clients and real-device checks.
+6. Publish/deploy only after review; retain the previous distribution for rollback.
 
-Build používá upstream nástroje: Node.js 24, npm, Git submodule VS Code a quilt.
-Build předpokládá inicializovaný submodule, aplikované patche a nainstalované závislosti;
-přesný postup pro úplnou distribuci je v upstream CONTRIBUTING.
-Příkaz `npm run watch` se bez izolované konfigurace nesmí spouštět: upstream má vlastní výchozí porty.
-
-Přenos na jiný server bude probíhat prostřednictvím připravené distribuce/image,
-nikoli kopírováním úprav do systémové instalace. Formát prvního vydání zatím není zvolený.
-
-## Aktualizace
-
-1. Vybrat konkrétní upstream release a načíst jeho tag.
-2. Integrovat upstream změny do pracovní větve, zachovat vlastní mobilní patche.
-3. Aktualizovat VS Code submodule podle upstreamu a ověřit aplikaci všech patchů.
-4. Sestavit izolovanou testovací distribuci.
-5. Spustit scénáře popsané v architektuře, včetně současného desktopového klienta.
-6. Teprve po ověření vydat vlastní verzi; předchozí balíček zachovat pro rollback.
-
-Samotný úspěšný merge nebo aplikace patchů není ověřením kompatibility rozhraní.
+A successful merge/build is not evidence of UI compatibility. Deployment on the
+current VPS is described in [DEPLOYMENT.md](madlik/DEPLOYMENT.md); it uses a separate
+release copy, not the development checkout or the installed system distribution.

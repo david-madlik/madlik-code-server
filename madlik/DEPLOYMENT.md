@@ -1,23 +1,61 @@
-# Nasazení na VPS
+# Current VPS deployment and rollback
 
-Nasazeno 2026-10-14 namísto původního code-serveru.
+Deployment date: **2026-10-14**. These paths describe the current development VPS;
+they are not a portable installer or a Git commit ID.
 
-- Release: `/opt/madlik-code-server/releases/0a3499e4fb95dddf5d0e317cd91cd314b29f83a3`.
-- Běží stejná služba `code-server@david`, uživatel david, interní port `127.0.0.1:18101`.
-- Vlastní ExecStart je v `/etc/systemd/system/code-server@david.service.d/20-madlik-fork.conf`.
-- Služba používá Node dodaný v release a nezávisí na nvm ani vývojové pracovní kopii.
-- Konfigurace: `/home/david/.config/code-server/config.yaml`.
-- Data a rozšíření: `/home/david/.local/share/code-server` (původní data).
-- Přihlášení, portál projektů, Caddy a Tailscale zůstaly v původní konfiguraci.
-- Release je vlastněný rootem; další preview build nepřepisuje nasazenou kopii.
-- Originální systémový balíček `/usr/lib/code-server` zůstává dostupný pro rollback.
+| Item | Current value |
+| --- | --- |
+| Release directory | `/opt/madlik-code-server/releases/41d769b81d10bf41b9194740364f0c5cd591dc48` |
+| Service / user | `code-server@david` / `david` |
+| Backend listener | `127.0.0.1:18101` |
+| systemd override | `/etc/systemd/system/code-server@david.service.d/20-madlik-fork.conf` |
+| Configuration | `/home/david/.config/code-server/config.yaml` |
+| User data/extensions | `/home/david/.local/share/code-server` |
 
-Před přepnutím byla zastavena služba a vytvořena záloha její konfigurace a dat:
-`/opt/madlik-code-server/backups/before-mobile-20261014/david-code-server.tar.gz`.
-Archiv je dostupný pouze rootovi. Jeho obnovení by přepsalo novější data; pro obyčejný
-návrat na původní binárku není potřeba.
+The override starts the Node executable and entry point inside the release copy.
+The running service does not depend on nvm, the development checkout or subsequent
+preview builds. Release directories are root-owned and retained for rollback.
+The release includes `LICENSE.simple-keyboard`.
 
-## Návrat na původní code-server
+Authentication and the existing project portal, Caddy, Tailscale, SSH and firewall
+configuration were not changed by the mobile UI work. The original installed
+`/usr/lib/code-server` remains available. No credentials or generated access files
+are stored in this repository.
+
+## Current behavior
+
+The release includes English mobile navigation, 75% font scaling, native xterm
+selection with Copy, a manual Paste dialog, compact theme-aware Code keyboard with
+hold/Ctrl/Alt/Fn, and the grouped keyboard control with the provider switch on the
+left and ⌨ on the right. Automatic clipboard reads, Shift+Insert and the earlier
+terminal snapshot/clipboard toolbar are not part of the current UI.
+
+Validation is summarized in [TESTING.md](TESTING.md). The final keyboard-control
+order change was a source build plus service health check; earlier behavior checks
+covered the switch itself. The owner has since tried the mobile UI on the phone.
+The source is published through the root repository's quilt patch; a build identity
+hash names the deployed distribution independently of the root Git commit.
+
+## Return to the preceding fork build
+
+Before the final order change, the systemd override was saved at:
+
+```text
+/opt/madlik-code-server/backups/before-keyboard-switch-order-20261014/20-madlik-fork.conf
+```
+
+Restore that override, reload systemd and restart the service:
+
+```sh
+sudo cp /opt/madlik-code-server/backups/before-keyboard-switch-order-20261014/20-madlik-fork.conf /etc/systemd/system/code-server@david.service.d/20-madlik-fork.conf
+sudo systemctl daemon-reload
+sudo systemctl restart code-server@david
+```
+
+This selects the retained preceding fork distribution and keeps current user data.
+Restarting disconnects browser clients and may stop terminal processes.
+
+## Return to the original installed code-server
 
 ```sh
 sudo mv /etc/systemd/system/code-server@david.service.d/20-madlik-fork.conf /etc/systemd/system/code-server@david.service.d/20-madlik-fork.conf.disabled
@@ -25,28 +63,12 @@ sudo systemctl daemon-reload
 sudo systemctl restart code-server@david
 ```
 
-Rollback používá původní balíček a aktuální uživatelská data. Restart odpojí editory
-a může ukončit terminálové procesy. Pro opětovné nasazení forku vrátit název souboru
-na `.conf`, provést daemon-reload a restart služby.
+To enable the fork again, restore the `.conf` filename, reload systemd and restart.
+The original pre-mobile configuration/data archive is root-only:
 
-## Aktualizace ovládání klávesnice
+```text
+/opt/madlik-code-server/backups/before-mobile-20261014/david-code-server.tar.gz
+```
 
-2026-10-14: Enter na konci terminálové řady a stálé tlačítko `⌨` pro přepnutí
-prohlížení/psaní. Nasazeno po izolovaném sestavení, typové kontrole a Playwright
-scénářích; žádné změny přihlášení nebo síťové konfigurace.
-Předchozí release `e070b58cc143a4904d64bb3c62e63b0a0ba3b4c9` zůstává zachovaný.
-Předchozí systemd drop-in je v
-`/opt/madlik-code-server/backups/before-keyboard-20261014/20-madlik-fork.conf`.
-Pro návrat pouze k předchozímu forku obnovit tento drop-in, provést daemon-reload
-a restart služby; data editoru se neobnovují ze zálohy.
-
-## Oprava dotykového scrollování
-
-2026-10-14: opravené souřadnice inerciálních dotykových událostí xterm,
-aby při mouse reportingu do aplikace neodcházely sekvence s NaN.
-Před nasazením prošla rozšířená cílená typová kontrola, sestavení,
-regrese SGR 1006/1016 i celá sada mobilních a desktopových scénářů.
-Předchozí release `7a5b0a227b215d7422a4ba70f9b7e52dc2e755b4` zůstává zachovaný;
-předchozí drop-in je v
-`/opt/madlik-code-server/backups/before-touch-20261014/20-madlik-fork.conf`.
-Přístupové údaje a síťová konfigurace se nemění.
+Ordinary binary rollback does not require restoring that archive. Restoring it
+would overwrite newer user data.

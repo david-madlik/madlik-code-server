@@ -1,61 +1,86 @@
-# Ověření mobilního rozhraní
+# Validation
 
-Datum: 2026-10-14. Základ: code-server 4.141.0 / VS Code 1.141.0.
+Baseline: **code-server 4.141.0 / VS Code 1.141.0**. Validation date: **2026-10-14**.
+Automated browser checks use Chromium/Playwright, isolated loopback code-server,
+a temporary Git workspace and separate user/shared/extension data. They do not
+modify working projects or their Git configuration.
 
-Ověřeno:
+## Automated coverage
 
-- Sestavení 19 server-web bundle souborů upstream esbuild pipeline.
-- Cílená kontrola TypeScript typů změněných produkčních modulů a jejich závislostí
-  pomocí `madlik/tsconfig.json` bez chyb. Úplný upstream projekt včetně všech testů
-  se tím nekontroluje.
-- Opakované odstranění a aplikace vlastního quilt patche bez konfliktů.
-- Chromium přes Playwright proti izolované instanci na 127.0.0.1:18110.
-- 390 × 844 a 375 × 667: čtyři režimy a jejich rozměry, původní Explorer,
-  otevření souboru, nativní Git stage/unstage a diff, automatický přechod na Editor.
-- Terminál: spuštění foreground procesu a zachování shell PID přes přepnutí
-  Soubory → Editor → Terminál. Proces se testuje ve fixture workspace.
-- Mobilní kontexty s `hasTouch` a `isMobile`: odmítnutí textového fokusu v editoru
-  a terminálu při prohlížení, povolení fokusu tlačítkem `⌨`, opětovné zavření,
-  terminálové Enter a Ctrl+C se zavřenou klávesnicí, dotyk terminálové plochy.
-- Standardní textový fokus palety příkazů na desktopu před mobilním režimem
-  a po jeho vypnutí; mobilní paleta funguje při povoleném psaní.
-- Ruční vypnutí/zapnutí, automatický režim a změna orientace přes hranici 768 px.
-- 1440 × 900: standardní desktop, nezměněná geometrie při souběžném mobilním
-  klientovi a jeho reloadu, obnovení stejné geometrie po zúžení a opětovném rozšíření.
-- Žádné nezachycené JavaScriptové výjimky ve finálním browser testu.
-- Pracovní code-server zůstal spuštěný; síťové konfigurace se neměnily.
+| Suite | Coverage |
+| --- | --- |
+| `test-mobile.mjs` | 390×844 and 375×667 sections, native file/diff opening, Git stage/unstage, terminal process survival, native focus gate and helper keys; 1440×900 simultaneous desktop/mobile isolation, reload and layout restoration |
+| `test-terminal-touch.mjs` | Real touch/scroll/inertia, SGR 1006 and 1016, missing-coordinate events, rejection of invalid gestures and no NaN input |
+| `test-clipboard.mjs` | Native xterm word/range selection and both handles, touch and mouse Copy, closing/clearing on copy, real browser Ctrl+V into the separate dialog, explicit bracketed paste, Cancel, reopening and mobile resize |
+| `test-code-keyboard.mjs` | Exact raw PTY bytes for text, symbols, Ctrl/Alt, F1/F12, Shift+F5 and Ctrl+Left; Backspace/Ctrl hold and release; no label selection; grouped Native/Code switch and focus; actual light/dark theme selection; 375×667 fit; Monaco edit/delete; desktop input restoration |
 
-Podrobný lokální výsledek: `.madlik/test-results.json`; snímky: `.madlik/screenshots/`.
-Soubor s výsledky se vytváří pouze po úspěchu celé testovací sady.
+The focused TypeScript check covers the changed production modules and imported
+dependencies, not every upstream test. The server-web build produces 19 bundles
+through upstream esbuild. Final browser suites reported no uncaught page exceptions.
+The mobile quilt patch has also been removed/reapplied to verify reproducibility.
 
-Neověřeno:
+The final switch order is **Code/Native on the left, ⌨ on the right**. This last
+presentation-only change was built and deployed with a health check; the same
+switch behavior was exercised by the keyboard suite before that order change.
+The owner then confirmed the arrangement on the phone.
 
-- Skutečný iPhone / Safari / Brave, softwarová klávesnice, zoom a safe-area na zařízení.
-- Skutečná interaktivní relace Codex CLI (prohlížečový test používá obyčejný shell proces).
-- Commit/push do skutečných repozitářů; test mění pouze lokální fixture.
-- Kompletní produkční balení, lokalizace a aktualizace na jinou verzi upstreamu.
-- Synchronizované profily, přesunuté vlastní view kontejnery a všechny kombinace
-  rozdělených editorů / Zen Mode / maximalizované sekundární lišty.
+## Running
 
-Vývojový incident: počáteční neomezený souběh kompilace a plné typové kontroly
-vyčerpal RAM VPS a systém ukončil Unity editor. Následující buildy běžely pod
-limitem paměti systemd. Build náhledu odmítá start pod 6 GiB dostupné RAM.
-Plná kontrola všech upstream typů nebyla dokončena; nepovažovat esbuild za typovou kontrolu.
+Build and start the isolated preview using [README.madlik.md](../README.madlik.md),
+then run these sequentially from the repository root:
 
-## Regrese dotykového scrollování terminálu
+```sh
+node lib/vscode/node_modules/playwright/cli.js install chromium
+node madlik/test-mobile.mjs
+node madlik/test-terminal-touch.mjs
+node madlik/test-clipboard.mjs
+node madlik/test-code-keyboard.mjs
+```
 
-`node madlik/test-terminal-touch.mjs` proti izolovanému preview, Chromium
-390 × 844 s dotykovým vstupem. Před opravou test reprodukoval příjem
-`ESC[<65;NaN;NaNM` v raw-mode aplikaci; log `.madlik/test-touch-before.log`.
-Po opravě prošly režimy SGR 1006 (buňky) i SGR 1016 (pixely):
+For repeatable raw PTY tests, use a fresh isolated user-data/shared profile per
+suite. Stop the preview, archive `.madlik/user-data` and `.madlik/shared`, create
+`.madlik/user-data/User`, retain its settings.json, and restart. Restoring terminals
+from disconnected earlier test browser contexts can change the active PTY and
+invalidate fixture setup. Do not reset production data or run concurrent suites
+against the same profile.
 
-- Skutečný touchStart/move/end přes CDP včetně doběhu po zvednutí prstu.
-- Explicitní inerciální událost bez souřadnic dál posílá scrollování se stejnou
-  platnou polohou jako poslední dotyk.
-- Gesto bez jakékoli použitelné polohy neposílá do procesu žádný vstup.
-- Přijaté mouse reporty mají číselné souřadnice, neobsahují NaN.
-- Psaní zůstává vypnuté a terminál nezíská textový fokus.
+For the focused typecheck:
 
-Výsledky: `.madlik/test-terminal-touch-results.json`. Testovací aplikace používá
-stejný terminálový protokol; samotná interaktivní relace Codex CLI na fyzickém
-iPhonu nebyla v rámci tohoto testu ověřena.
+```sh
+lib/vscode/node_modules/.bin/tsc -p madlik/tsconfig.json --noEmit --skipLibCheck
+```
+
+Build/typecheck separately with a 4 GiB memory limit. The build requires at least
+6 GiB available RAM including reserve. An early uncapped build/full-typecheck
+combination exhausted VPS RAM and the OS terminated a Unity editor; subsequent
+checks use caps. A complete upstream typecheck was not completed.
+
+## Artifacts
+
+All generated artifacts are ignored under `.madlik/`, including:
+
+- `test-results.json`
+- `test-terminal-touch-results.json`
+- `test-clipboard-results.json`
+- `test-code-keyboard-results.json`
+- logs and `screenshots/code-keyboard-light.png`, `code-keyboard-375.png`,
+  `direct-terminal-selection.png`
+
+Result JSON files are written after the corresponding suite succeeds. Historical
+logs from removed clipboard prototypes do not describe the current implementation.
+
+## Device feedback and limits
+
+The owner has tested the mobile UI on an iPhone and reported working selection,
+copy and paste through the manual dialog, and a usable Code keyboard. Automated
+checks do not prove all Safari/Brave behavior, physical keyboard repeat, actual
+native dictation, zoom, orientation or safe-area combinations on iOS.
+
+Raw-mode fixtures exercise the terminal input protocols used by interactive tools;
+there is no complete automated interactive Codex CLI session on a physical iPhone.
+Production commit/push operations in user projects are not part of the test suite.
+
+Other unverified areas include all custom shortcuts, extension webviews,
+synchronized profiles, moved custom view containers, every split-editor/Zen Mode
+combination, full portable distribution packaging and updates to another upstream
+release. No automated Safari/WebKit device suite is provided.

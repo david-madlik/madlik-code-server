@@ -20,6 +20,7 @@ await access(path.join(out, 'vs/code/browser/workbench/workbench.js'));
 await mkdir(cache, { recursive: true });
 await cp(source, runtime, { recursive: true });
 await cp(out, path.join(runtime, 'lib/vscode/out'), { recursive: true });
+await cp(path.join(root, 'lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/vendor/LICENSE.simple-keyboard'), path.join(runtime, 'LICENSE.simple-keyboard'));
 // The server routes and client product must use the same build identity.
 // Deriving it from the patch also invalidates browser caches after UI changes.
 const runtimePackagePath = path.join(runtime, 'package.json');

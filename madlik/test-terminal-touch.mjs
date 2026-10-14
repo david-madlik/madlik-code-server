@@ -9,16 +9,17 @@ const fixture=path.join(cache,'mouse-input.py');
 await writeFile(fixture,`import sys,os,tty,termios,select,time\nfd=sys.stdin.fileno()\nprevious=termios.tcgetattr(fd)\ntry:\n tty.setraw(fd)\n sys.stdout.write('\\x1b[?1000h\\x1b[?'+sys.argv[1]+'h');sys.stdout.flush()\n open(sys.argv[2]+'.ready','w').close()\n with open(sys.argv[2]+'.bin','wb') as out:\n  deadline=time.monotonic()+15\n  while time.monotonic()<deadline and not os.path.exists(sys.argv[2]+'.stop'):\n   if select.select([fd],[],[],0.1)[0]:\n    out.write(os.read(fd,65536));out.flush()\nfinally:\n sys.stdout.write('\\x1b[?1000l\\x1b[?1006l\\x1b[?1016l');sys.stdout.flush()\n termios.tcsetattr(fd,termios.TCSADRAIN,previous)\n open(sys.argv[2]+'.done','w').close()\n`);
 const browser=await chromium.launch({headless:true});
 const results=[];
+let page;
 try {
  const context=await browser.newContext({viewport:{width:390,height:844},hasTouch:true,isMobile:true});
- const page=await context.newPage();
+ page=await context.newPage();
  await page.goto('http://127.0.0.1:18110/?folder='+encodeURIComponent(path.join(cache,'workspace')));
  await page.locator('.madlik-mobile-navigation').waitFor({timeout:60000});
  await page.locator('[data-section="terminal"]').click();
- const terminal=page.locator('.terminal-wrapper:visible .xterm-helper-textarea').first();
+ const terminal=page.locator('.terminal-wrapper.active:visible .xterm-helper-textarea').first();
  await terminal.waitFor({state:'attached',timeout:20000});
- const keyboard=page.locator('[data-action="keyboard"]');
- const screen=page.locator('.terminal-wrapper:visible .xterm-screen').first();
+ const keyboard=page.locator('[data-action="keyboard"]');await page.locator('[data-action="keyboard-provider"]').click();
+ const screen=page.locator('.terminal-wrapper.active:visible .xterm-screen').first();
  for(const encoding of ['1006','1016']) {
   const prefix=path.join(cache,`mouse-${encoding}-${Date.now()}`);
   await terminal.focus(); // Remember input while browsing.
@@ -75,4 +76,9 @@ try {
  }
  console.log(results.join('\n'));
  await writeFile(path.join(cache,'test-terminal-touch-results.json'),JSON.stringify({results},null,2));
+} catch(error) {
+ if(page) {
+  await page.screenshot({path:path.join(cache,'screenshots/touch-failure.png')}).catch(()=>{});
+ }
+ throw error;
 } finally { await browser.close(); }

@@ -16,6 +16,9 @@
     "../lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/madlikMobile.contribution.ts",
     "../lib/vscode/src/vs/workbench/browser/parts/compositePart.ts",
     "../lib/vscode/src/vs/workbench/browser/parts/editor/editorPart.ts",
-    "../lib/vscode/src/vs/workbench/contrib/terminal/browser/xterm/xtermTerminal.ts"
+    "../lib/vscode/src/vs/workbench/contrib/terminal/browser/xterm/xtermTerminal.ts",
+    "../lib/vscode/src/vs/workbench/contrib/terminal/browser/terminalConfigurationService.ts",
+    "../lib/vscode/src/vs/workbench/contrib/terminal/browser/terminalInstance.ts",
+    "../lib/vscode/src/vs/editor/browser/config/editorConfiguration.ts"
   ]
 }

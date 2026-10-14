@@ -48,6 +48,8 @@ async function select(page, section) {
 }
 
 async function keyboard(page, enabled) {
+  const provider=page.locator('[data-action="keyboard-provider"]');
+  if (enabled && await provider.isVisible() && await provider.getAttribute('aria-checked') === 'false') { await provider.click(); }
   const button = page.locator('[data-action="keyboard"]');
   if (await button.isVisible() && await button.getAttribute('aria-pressed') !== String(enabled)) {
     await button.click();
@@ -100,10 +102,10 @@ try {
     await expect(page.locator('.monaco-diff-editor').first()).toBeVisible();
     await select(page,'terminal');
     console.log('terminal persistence',viewport.width);
-    const terminal = page.locator('.terminal-wrapper:visible .xterm-helper-textarea').first();
+    const terminal = page.locator('.terminal-wrapper.active:visible .xterm-helper-textarea').first();
     await terminal.waitFor({state:'attached',timeout:15000});
     await expect(terminal).toHaveAttribute('inputmode','none');
-    await page.locator('.terminal-wrapper:visible .xterm-screen').first().tap();
+    await page.locator('.terminal-wrapper.active:visible .xterm-screen').first().tap();
     expect(await terminal.evaluate(element=>element === document.activeElement)).toBe(false);
     await terminal.focus();
     expect(await terminal.evaluate(element=>element === document.activeElement)).toBe(false);
@@ -125,11 +127,18 @@ try {
     await expect(terminal).toHaveAttribute('inputmode','none');
     await page.getByRole('button',{name:'Ctrl+C',exact:true}).click();
     await expect(terminal).toHaveAttribute('inputmode','none');
+    // Confirm Ctrl+C returned to the shell before closing its client window.
+    await keyboard(page,true);
+    await terminal.focus();
+    await page.keyboard.type(`printf done > '${marker}.done'`);
+    await page.locator('.madlik-mobile-terminal-keys button').last().click();
+    await expect.poll(async()=>{try{return await readFile(marker+'.done','utf8')}catch{return ''}}).toBe('done');
+    await keyboard(page,false);
     results.push(`${viewport.width}x${viewport.height}: modes, native Explorer/file, Git stage/unstage/diff, terminal process persistence, browse/typing focus gate, Enter and Ctrl+C with keyboard closed OK`);
     console.log('mode toggle and rotation',viewport.width);
-    await command(page, 'Madlik Mobile: Vypnout');
+    await command(page, 'Madlik Mobile: Disable');
     await expect(page.locator('.madlik-mobile-navigation')).toBeHidden();
-    await command(page, 'Madlik Mobile: Automaticky');
+    await command(page, 'Madlik Mobile: Automatic');
     await expect(page.locator('.madlik-mobile-navigation')).toBeVisible();
     await page.setViewportSize({width:844,height:390});
     await expect(page.locator('.madlik-mobile-navigation')).toBeHidden();

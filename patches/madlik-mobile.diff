@@ -188,13 +188,18 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 ===================================================================
 --- /dev/null
 +++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/madlikMobile.contribution.ts
-@@ -0,0 +1,208 @@
+@@ -0,0 +1,276 @@
 +/*---------------------------------------------------------------------------------------------
 + * Copyright (c) Madlik. All rights reserved.
 + * Licensed under the MIT License. See License.txt in the project root.
 + *--------------------------------------------------------------------------------------------*/
 +
 +import './media/madlikMobile.css';
++import { MobileCodeKeyboard, CodeKey } from './mobileCodeKeyboard.js';
++import { terminalCodeKey } from './mobileCodeInput.js';
++import { ITerminalService } from '../../terminal/browser/terminal.js';
++import { getCodeEditor } from '../../../../editor/browser/editorBrowser.js';
++import { MobileFonts } from './mobileFonts.js';
 +import { getMobileKeyboard } from '../../../../base/browser/mobileKeyboard.js';
 +import { addDisposableListener } from '../../../../base/browser/dom.js';
 +import { mainWindow } from '../../../../base/browser/window.js';
@@ -208,7 +213,6 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +import { ICommandService, CommandsRegistry } from '../../../../platform/commands/common/commands.js';
 +import { INotificationService } from '../../../../platform/notification/common/notification.js';
 +import { MenuId, MenuRegistry } from '../../../../platform/actions/common/actions.js';
-+import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 +
 +type Mode = 'auto' | 'on' | 'off';
 +type Section = 'files' | 'git' | 'editor' | 'terminal';
@@ -226,8 +230,13 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +	private readonly terminalKeys = mainWindow.document.createElement('div');
 +	private readonly buttons = new Map<Section, HTMLButtonElement>();
 +	private typing = false;
++	private keyboardProvider: 'code' | 'native' = 'code';
++	private codeKeyboard!: MobileCodeKeyboard;
++	private readonly providerButton = mainWindow.document.createElement('button');
++	private readonly providerLabel = mainWindow.document.createElement('span');
 +	private readonly keyboardButton = mainWindow.document.createElement('button');
 +	private readonly keyboard = getMobileKeyboard(mainWindow);
++	private readonly fonts = this._register(new MobileFonts(mainWindow));
 +	private previousSidebar: string | undefined;
 +	private previousPanel: string | undefined;
 +
@@ -237,27 +246,32 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +		@IEditorService private readonly editors: IEditorService,
 +		@ICommandService private readonly commands: ICommandService,
 +		@INotificationService private readonly notifications: INotificationService,
-+		@IQuickInputService private readonly quickInput: IQuickInputService,
++		@ITerminalService private readonly terminals: ITerminalService,
 +	) {
 +		super();
 +		if (!isWeb) { return; }
 +		this.nav.className = 'madlik-mobile-navigation';
 +		this.nav.hidden = true;
-+		this.nav.setAttribute('aria-label', 'Madlik mobilní navigace');
++		this.nav.setAttribute('aria-label', 'Madlik mobile navigation');
 +		this.terminalKeys.className = 'madlik-mobile-terminal-keys';
 +		this.terminalKeys.hidden = true;
-+		this.terminalKeys.setAttribute('aria-label', 'Terminálové klávesy');
-+		for (const [label, text] of [['Ctrl+C', '\u0003'], ['Esc', '\u001b'], ['Tab', '\t'], ['↑', '\u001b[A'], ['↓', '\u001b[B'], ['Enter', '\r']]) {
++		this.terminalKeys.setAttribute('aria-label', 'Terminal keys');
++		for (const [label, text] of [['Ctrl+C', '\u0003'], ['Esc', '\u001b'], ['Tab', '\t'], ['←', '\u001b[D'], ['↓', '\u001b[B'], ['↑', '\u001b[A'], ['→', '\u001b[C'], ['Enter', '\r']]) {
 +			const key = mainWindow.document.createElement('button');
 +			key.type = 'button';
 +			key.textContent = label;
 +			this.terminalKeys.appendChild(key);
 +			this._register(addDisposableListener(key, 'click', () => {
-+				this.commands.executeCommand('workbench.action.terminal.sendSequence', { text }).catch(error => this.notifications.error(error));
++				if (this.typing && this.keyboardProvider === 'code') {
++					const keys: Record<string, string> = { 'Esc': '{esc}', 'Tab': '{tab}', '←': '{left}', '↓': '{down}', '↑': '{up}', '→': '{right}', 'Enter': '{enter}' };
++					this.codeKeyboard.sendKey(keys[label] ?? text);
++				} else { this.commands.executeCommand('workbench.action.terminal.sendSequence', { text }).catch(error => this.notifications.error(error)); }
 +			}));
 +		}
 +		this.nav.appendChild(this.terminalKeys);
-+		for (const [section, label] of [['files', 'Soubory'], ['git', 'Git'], ['editor', 'Editor'], ['terminal', 'Terminál']] as const) {
++		this.codeKeyboard = this._register(new MobileCodeKeyboard(mainWindow.document, key => { this.sendCodeKey(key).catch(error => this.notifications.error(error)); }, () => this.resize()));
++		this.nav.appendChild(this.codeKeyboard.element);
++		for (const [section, label] of [['files', 'Explorer'], ['git', 'Git'], ['editor', 'Editor'], ['terminal', 'Terminal']] as const) {
 +			const button = mainWindow.document.createElement('button');
 +			button.type = 'button';
 +			button.textContent = label;
@@ -269,33 +283,33 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +		this.keyboardButton.type = 'button';
 +		this.keyboardButton.textContent = '⌨';
 +		this.keyboardButton.dataset.action = 'keyboard';
-+		this.nav.appendChild(this.keyboardButton);
++		const keyboardControl = mainWindow.document.createElement('div');
++		keyboardControl.className = 'madlik-keyboard-control'; keyboardControl.setAttribute('role', 'group'); keyboardControl.setAttribute('aria-label', 'Keyboard controls');
++		this.providerButton.type = 'button'; this.providerButton.dataset.action = 'keyboard-provider';
++		this.providerButton.setAttribute('role', 'switch'); this.providerButton.setAttribute('aria-label', 'Native keyboard');
++		this.providerLabel.className = 'madlik-keyboard-provider-label';
++		const track = mainWindow.document.createElement('span'); track.className = 'madlik-keyboard-provider-track'; track.setAttribute('aria-hidden', 'true');
++		this.providerButton.append(this.providerLabel, track);
++		keyboardControl.append(this.providerButton, this.keyboardButton); this.nav.appendChild(keyboardControl);
++		const changeProvider = () => {
++			this.keyboardProvider = this.keyboardProvider === 'code' ? 'native' : 'code';
++			this.codeKeyboard.reset(); this.applyKeyboard();
++		};
++		let lastProviderTouch = -Infinity;
++		this._register(addDisposableListener(this.providerButton, 'touchend', event => {
++			event.preventDefault(); lastProviderTouch = mainWindow.performance.now(); changeProvider();
++		}, { passive: false }));
++		this._register(addDisposableListener(this.providerButton, 'click', event => {
++			if (event.detail === 0 || mainWindow.performance.now() - lastProviderTouch > 1000) { changeProvider(); }
++		}));
 +		// Preserve the current input when tapping navigation/keys, and avoid
 +		// dismissing Safari's keyboard before the toggle handler runs.
 +		this._register(addDisposableListener(this.nav, 'pointerdown', event => {
-+			if (event.target instanceof mainWindow.HTMLButtonElement) { event.preventDefault(); }
++			if (event.target instanceof mainWindow.HTMLElement && event.target.closest('button')) { event.preventDefault(); }
 +		}));
 +		this._register(addDisposableListener(this.keyboardButton, 'click', () => {
 +			this.typing = !this.typing;
-+			if (this.typing) { this.keyboard.open(); }
-+			else { this.keyboard.setTyping(false); }
-+			this.resize();
-+		}));
-+		const options = mainWindow.document.createElement('button');
-+		options.type = 'button';
-+		options.textContent = '⋯';
-+		options.setAttribute('aria-label', 'Mobilní režim a příkazy');
-+		this.nav.appendChild(options);
-+		this._register(addDisposableListener(options, 'click', () => {
-+			this.quickInput.pick([
-+				{ label: 'Automaticky podle šířky', mode: 'auto' as const },
-+				{ label: 'Mobilní režim zapnutý', mode: 'on' as const },
-+				{ label: 'Vypnout mobilní režim', mode: 'off' as const },
-+				{ label: 'Paleta příkazů', mode: undefined },
-+			], { placeHolder: 'Madlik Mobile' }).then(item => {
-+				if (item?.mode) { this.mode = item.mode; this.updateMode(); }
-+				else if (item) { this.commands.executeCommand('workbench.action.showCommands'); }
-+			}).catch(error => this.notifications.error(error));
++			this.applyKeyboard();
 +		}));
 +		this.layoutService.mainContainer.appendChild(this.nav);
 +		this._register(toDisposable(() => this.nav.remove()));
@@ -315,7 +329,7 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +		for (const mode of ['auto', 'on', 'off'] as const) {
 +			const id = `madlik.mobile.${mode}`;
 +			this._register(CommandsRegistry.registerCommand(id, () => { this.mode = mode; this.updateMode(); }));
-+			this._register(MenuRegistry.appendMenuItem(MenuId.CommandPalette, { command: { id, title: `Madlik Mobile: ${mode === 'auto' ? 'Automaticky' : mode === 'on' ? 'Zapnout' : 'Vypnout'}` } }));
++			this._register(MenuRegistry.appendMenuItem(MenuId.CommandPalette, { command: { id, title: `Madlik Mobile: ${mode === 'auto' ? 'Automatic' : mode === 'on' ? 'Enable' : 'Disable'}` } }));
 +		}
 +		for (const section of this.buttons.keys()) {
 +			this._register(CommandsRegistry.registerCommand(`madlik.mobile.${section}`, () => { this.select(section); return this.queue; }));
@@ -330,6 +344,9 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +		this.active = active;
 +		this.typing = false;
 +		this.keyboard.setActive(active);
++		this.codeKeyboard.show(false);
++		if (!active) { this.codeKeyboard.deactivate(); }
++		this.fonts.setActive(active);
 +		this.generation++;
 +		this.nav.hidden = !active;
 +		this.layoutService.mainContainer.classList.toggle('madlik-mobile', active);
@@ -365,6 +382,8 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +			try {
 +				this.typing = false;
 +				this.keyboard.setTyping(false);
++				this.codeKeyboard.show(false);
++				this.codeKeyboard.reset();
 +				this.section = section;
 +				this.resize();
 +				if (section === 'files' || section === 'git') {
@@ -374,17 +393,66 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +				} else {
 +					this.layoutService.focusPart(Parts.EDITOR_PART, mainWindow);
 +				}
-+				if (this.active && generation === this.generation) { this.resize(); }
++				if (this.active && generation === this.generation) { this.fonts.refresh(); this.resize(); }
 +			} finally { this.switching = false; }
 +		}).catch(error => this.notifications.error(error));
++	}
++
++	private applyKeyboard(): void {
++		this.keyboard.setTyping(false);
++		this.codeKeyboard.show(this.typing && this.keyboardProvider === 'code');
++		if (this.typing && this.keyboardProvider === 'native') { this.keyboard.open(); }
++		this.resize();
++	}
++
++	private async sendCodeKey(key: CodeKey): Promise<void> {
++		if (!this.active) { return; }
++		const target = this.keyboard.getInputTarget();
++		const input = target instanceof mainWindow.HTMLInputElement || target instanceof mainWindow.HTMLTextAreaElement ? target : undefined;
++		if (input && input.getClientRects().length && !input.closest('.monaco-editor, .xterm')) {
++			if (input.readOnly || input.disabled) { return; }
++			const start = input.selectionStart ?? input.value.length, end = input.selectionEnd ?? start;
++			if (key.ctrl && key.key.toLowerCase() === 'a') { input.setSelectionRange(0, input.value.length); return; }
++			const moves: Record<string, number> = { '{left}': Math.max(0, start - 1), '{right}': Math.min(input.value.length, end + 1), '{home}': 0, '{end}': input.value.length };
++			if (key.key in moves) { input.setSelectionRange(moves[key.key], moves[key.key]); return; }
++			if (key.ctrl || key.alt) { return; }
++			if (key.key === '{bksp}') { input.setRangeText('', start === end ? Math.max(0, start - 1) : start, end, 'end'); }
++			else if (key.key === '{delete}') { input.setRangeText('', start, start === end ? Math.min(input.value.length, end + 1) : end, 'end'); }
++			else {
++				const text = key.key === '{space}' ? ' ' : key.key === '{enter}' ? '\n' : key.key === '{tab}' ? '\t' : key.key.length === 1 ? key.key : undefined;
++				if (text === undefined) { return; }
++				input.setRangeText(text, start, end, 'end');
++			}
++			input.dispatchEvent(new mainWindow.Event('input', { bubbles: true })); return;
++		}
++		if (this.section === 'terminal') {
++			const terminal = (target?.getClientRects().length ? this.terminals.instances.find(instance => instance.xterm?.raw.textarea === target) : undefined) ?? this.terminals.activeInstance;
++			const text = terminalCodeKey(key, terminal?.xterm?.raw.modes.applicationCursorKeysMode ?? false);
++			if (terminal && text !== undefined) { await terminal.sendText(text, false, false); }
++			return;
++		}
++		const editor = getCodeEditor(this.editors.activeTextEditorControl);
++		if (!editor || this.section !== 'editor') { return; }
++		const simple: Record<string, string> = { '{bksp}': 'deleteLeft', '{delete}': 'deleteRight', '{left}': 'cursorLeft', '{right}': 'cursorRight', '{up}': 'cursorUp', '{down}': 'cursorDown', '{home}': 'cursorHome', '{end}': 'cursorEnd', '{pgup}': 'cursorPageUp', '{pgdn}': 'cursorPageDown', '{tab}': key.shift ? 'outdent' : 'tab', '{enter}': 'lineBreakInsert', '{esc}': 'hideSuggestWidget' };
++		const shortcuts: Record<string, string> = { a: 'editor.action.selectAll', z: key.shift ? 'redo' : 'undo', y: 'redo', s: 'workbench.action.files.save', f: 'actions.find', h: 'editor.action.startFindReplaceAction', p: 'workbench.action.quickOpen' };
++		const functions: Record<string, string> = { '{f1}': 'workbench.action.showCommands', '{f2}': 'editor.action.rename', '{f3}': key.shift ? 'editor.action.previousMatchFindAction' : 'editor.action.nextMatchFindAction', '{f4}': 'editor.action.marker.nextInFiles', '{f5}': 'workbench.action.debug.start', '{f6}': 'workbench.action.focusNextPart', '{f7}': 'workbench.action.compareEditor.nextChange', '{f8}': 'editor.action.marker.nextInFiles', '{f9}': 'editor.debug.action.toggleBreakpoint', '{f10}': 'workbench.action.debug.stepOver', '{f11}': key.shift ? 'workbench.action.debug.stepOut' : 'workbench.action.debug.stepInto', '{f12}': key.shift ? 'editor.action.referenceSearch.trigger' : 'editor.action.revealDefinition' };
++		const command = functions[key.key] ?? (key.ctrl ? shortcuts[key.key.toLowerCase()] : undefined);
++		if (command) { await this.commands.executeCommand(command); return; }
++		if (key.ctrl || key.alt) { this.notifications.info('Use the native keyboard for this editor shortcut.'); return; }
++		if (simple[key.key]) { editor.trigger('madlik-mobile', simple[key.key], {}); return; }
++		const text = key.key === '{space}' ? ' ' : key.key.length === 1 ? key.key : undefined;
++		if (text !== undefined) { editor.trigger('madlik-mobile', 'type', { text }); }
 +	}
 +
 +	private resize(): void {
 +		if (!this.active) { return; }
 +		this.terminalKeys.hidden = this.section !== 'terminal';
++		this.providerLabel.textContent = this.keyboardProvider === 'code' ? 'Code' : 'Native';
++		this.providerButton.setAttribute('aria-checked', String(this.keyboardProvider === 'native'));
++		this.providerButton.title = this.keyboardProvider === 'code' ? 'Switch to native keyboard' : 'Switch to Code keyboard';
 +		this.keyboardButton.setAttribute('aria-pressed', String(this.typing));
-+		this.keyboardButton.setAttribute('aria-label', this.typing ? 'Zavřít klávesnici' : 'Otevřít klávesnici');
-+		this.keyboardButton.title = this.typing ? 'Zavřít klávesnici' : 'Otevřít klávesnici';
++		this.keyboardButton.setAttribute('aria-label', this.typing ? 'Hide keyboard' : 'Show keyboard');
++		this.keyboardButton.title = this.typing ? 'Hide keyboard' : 'Show keyboard';
 +		for (const [section, button] of this.buttons) {
 +			button.setAttribute('aria-pressed', String(section === this.section));
 +		}
@@ -401,14 +469,14 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 ===================================================================
 --- /dev/null
 +++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/media/madlikMobile.css
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,235 @@
 +.monaco-workbench .madlik-mobile-navigation {
 +	position: absolute;
 +	left: 0;
 +	right: 0;
 +	z-index: 100;
 +	display: grid;
-+	grid-template-columns: repeat(4, minmax(0, 1fr)) 44px 44px;
++	grid-template-columns: repeat(4, minmax(0, 1fr)) 100px;
 +	gap: 4px;
 +	padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
 +	box-sizing: border-box;
@@ -421,7 +489,7 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +.monaco-workbench .madlik-mobile-terminal-keys {
 +	grid-column: 1 / -1;
 +	display: grid;
-+	grid-template-columns: repeat(6, minmax(0, 1fr));
++	grid-template-columns: repeat(3, minmax(0, 1fr)) repeat(4, minmax(0, 0.5fr)) minmax(0, 1fr);
 +	gap: 4px;
 +}
 +
@@ -435,7 +503,7 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +	font: inherit;
 +	font-size: 13px;
 +	color: var(--vscode-foreground);
-+	background: transparent;
++	background: rgba(128, 128, 128, 0.16);
 +	touch-action: manipulation;
 +	cursor: pointer;
 +}
@@ -449,6 +517,193 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +.monaco-workbench .madlik-mobile-navigation button:focus-visible {
 +	outline: 2px solid var(--vscode-focusBorder);
 +	outline-offset: -2px;
++}
++
++.xterm .madlik-terminal-touch-ui {
++	user-select: none;
++	-webkit-user-select: none;
++	-webkit-touch-callout: none;
++	position: absolute;
++	inset: 0;
++	pointer-events: none;
++	z-index: 40;
++}
++.xterm .madlik-terminal-touch-ui[hidden],
++.xterm .madlik-terminal-touch-menu[hidden],
++.xterm .madlik-terminal-touch-handle[hidden] { display: none; }
++.xterm .madlik-terminal-touch-menu {
++	position: absolute;
++	display: flex;
++	pointer-events: auto;
++	background: var(--vscode-menu-background);
++	color: var(--vscode-menu-foreground);
++	border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border));
++	border-radius: 8px;
++	box-shadow: 0 2px 8px var(--vscode-widget-shadow);
++	max-width: 100%;
++}
++.xterm .madlik-terminal-touch-menu button {
++	min-height: 44px;
++	min-width: 60px;
++	padding: 8px;
++	border: 0;
++	border-radius: 6px;
++	background: transparent;
++	color: inherit;
++	font-family: var(--vscode-font-family);
++	font-size: 13px;
++	touch-action: manipulation;
++}
++.xterm .madlik-terminal-touch-menu button:focus-visible { outline: 2px solid var(--vscode-focusBorder); }
++.xterm .madlik-terminal-touch-handle {
++	position: absolute;
++	width: 44px;
++	height: 44px;
++	padding: 0;
++	border: 0;
++	background: transparent;
++	pointer-events: auto;
++	touch-action: none;
++	transform: translate(-50%, -8px);
++}
++.xterm .madlik-terminal-touch-handle::after {
++	content: '';
++	position: absolute;
++	left: 15px;
++	top: 8px;
++	width: 14px;
++	height: 14px;
++	border-radius: 50%;
++	background: var(--vscode-focusBorder);
++}
++dialog.madlik-terminal-paste-dialog {
++	width: min(520px, calc(100vw - 32px));
++	max-height: calc(100dvh - 32px);
++	padding: 16px;
++	box-sizing: border-box;
++	border: 1px solid var(--vscode-widget-border, #666);
++	border-radius: 10px;
++	background: var(--vscode-editor-background, #202020);
++	color: var(--vscode-editor-foreground, #eee);
++	font: 14px system-ui, sans-serif;
++	overflow: auto;
++	user-select: text;
++	-webkit-user-select: text;
++	-webkit-touch-callout: default;
++}
++dialog.madlik-terminal-paste-dialog[hidden] { display: none; }
++dialog.madlik-terminal-paste-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
++dialog.madlik-terminal-paste-dialog h2 { font-size: 18px; margin: 0 0 8px; }
++dialog.madlik-terminal-paste-dialog textarea {
++	display: block;
++	width: 100%;
++	height: min(180px, 30dvh);
++	margin: 12px 0;
++	padding: 10px;
++	box-sizing: border-box;
++	resize: vertical;
++	border: 1px solid var(--vscode-input-border, #888);
++	border-radius: 6px;
++	background: var(--vscode-input-background, #333);
++	color: var(--vscode-input-foreground, #fff);
++	font: 16px monospace;
++	user-select: text;
++	-webkit-user-select: text;
++	-webkit-touch-callout: default;
++}
++dialog.madlik-terminal-paste-dialog button {
++	min-height: 44px;
++	padding: 8px 12px;
++	margin-right: 8px;
++	border: 0;
++	border-radius: 6px;
++	background: var(--vscode-button-background, #007acc);
++	color: var(--vscode-button-foreground, #fff);
++	font: inherit;
++	touch-action: manipulation;
++}
++dialog.madlik-terminal-paste-dialog button:disabled { opacity: 0.45; }
++
++/* Sticky command headers cover the real buffer and intercept long presses. */
++.monaco-workbench.madlik-mobile .terminal-sticky-scroll { display: none !important; }
++.monaco-workbench.madlik-mobile .xterm .xterm-screen { -webkit-touch-callout: none; }
++
++.xterm .madlik-terminal-touch-menu button:disabled { opacity: 0.5; }
++
++.monaco-workbench .madlik-code-keyboard {
++ grid-column: 1 / -1;
++ padding: 4px 0;
++ background: var(--vscode-sideBar-background);
++ touch-action: none;
++ user-select: none;
++ -webkit-user-select: none;
++ -webkit-touch-callout: none;
++}
++.monaco-workbench .madlik-code-keyboard[hidden] { display: none; }
++.monaco-workbench .madlik-code-keyboard-toolbar { display: flex; gap: 4px; margin-bottom: 6px; }
++.monaco-workbench .madlik-code-keyboard-toolbar button {
++ flex: 1; min-height: 32px; padding: 0 4px; font-size: 13px;
++ background: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
++ color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
++}
++.monaco-workbench .madlik-code-keyboard .hg-row { display: flex; gap: 3px; margin-bottom: 4px; }
++.monaco-workbench .madlik-code-keyboard .hg-row:last-child { margin-bottom: 0; }
++.monaco-workbench .madlik-code-keyboard .hg-button {
++ flex: 1; height: 38px; min-height: 38px; padding: 0; font-size: 16px;
++ background: var(--vscode-input-background); color: var(--vscode-input-foreground);
++ border: 1px solid var(--vscode-widget-border, transparent); border-radius: 5px;
++ box-shadow: 0 1px 1px var(--vscode-widget-shadow); touch-action: none;
++}
++.monaco-workbench .madlik-code-keyboard .hg-button-space { flex: 6; }
++.monaco-workbench .madlik-code-keyboard .hg-button-enter { flex: 2; }
++.monaco-workbench .madlik-code-keyboard .hg-button-shift,
++.monaco-workbench .madlik-code-keyboard .hg-button-bksp { flex: 1.3; }
++.monaco-workbench .madlik-code-keyboard-toolbar button[aria-pressed="true"],
++.monaco-workbench .madlik-code-keyboard .hg-activeButton,
++.monaco-workbench .madlik-code-keyboard .madlik-shift-active .hg-button-shift {
++ background: var(--vscode-button-background); color: var(--vscode-button-foreground);
++}
++
++/* Native button/span rules may override inherited selection on touch devices. */
++.monaco-workbench .madlik-mobile-navigation,
++.monaco-workbench .madlik-mobile-navigation * {
++ user-select: none !important;
++ -webkit-user-select: none !important;
++ -webkit-touch-callout: none !important;
++}
++
++.monaco-workbench .madlik-keyboard-control {
++ display: grid;
++ grid-template-columns: minmax(0, 1fr) 42px;
++ align-items: stretch;
++ border: 1px solid var(--vscode-panel-border, var(--vscode-contrastBorder, transparent));
++ border-radius: 8px;
++ background: rgba(128, 128, 128, 0.16);
++ overflow: hidden;
++}
++.monaco-workbench .madlik-keyboard-control button {
++ border: 0; border-radius: 0; background: transparent; min-height: 42px; padding: 0;
++}
++.monaco-workbench .madlik-keyboard-control [data-action="keyboard"] { font-size: 18px; }
++.monaco-workbench .madlik-keyboard-control [data-action="keyboard-provider"] {
++ display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
++ border-right: 1px solid var(--vscode-panel-border, var(--vscode-contrastBorder, transparent));
++}
++.monaco-workbench .madlik-keyboard-provider-label { font-size: 11px; line-height: 14px; }
++.monaco-workbench .madlik-keyboard-provider-track {
++ display: block; width: 28px; height: 14px; border-radius: 9px;
++ background: var(--vscode-input-background); border: 1px solid var(--vscode-foreground);
++ box-sizing: border-box; position: relative;
++}
++.monaco-workbench .madlik-keyboard-provider-track::after {
++ content: ''; position: absolute; left: 2px; top: 2px; width: 8px; height: 8px;
++ border-radius: 50%; background: var(--vscode-foreground); transition: transform 100ms ease;
++}
++.monaco-workbench .madlik-keyboard-control [aria-checked="true"] .madlik-keyboard-provider-track {
++ background: var(--vscode-button-background); border-color: var(--vscode-button-background);
++}
++.monaco-workbench .madlik-keyboard-control [aria-checked="true"] .madlik-keyboard-provider-track::after {
++ transform: translateX(14px); background: var(--vscode-button-foreground);
 +}
 Index: madlik-code-server/lib/vscode/src/vs/workbench/services/layout/browser/layoutService.ts
 ===================================================================
@@ -510,7 +765,7 @@ Index: madlik-code-server/lib/vscode/src/vs/base/browser/mobileKeyboard.ts
 ===================================================================
 --- /dev/null
 +++ madlik-code-server/lib/vscode/src/vs/base/browser/mobileKeyboard.ts
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,84 @@
 +/*---------------------------------------------------------------------------------------------
 + * Copyright (c) Madlik. All rights reserved.
 + * Licensed under the MIT License. See License.txt in the project root.
@@ -564,6 +819,8 @@ Index: madlik-code-server/lib/vscode/src/vs/base/browser/mobileKeyboard.ts
 +			}
 +		}
 +	}
++
++	getInputTarget(): HTMLElement | undefined { return this.target?.isConnected ? this.target : undefined; }
 +
 +	open(): void {
 +		this.setTyping(true);
@@ -665,20 +922,22 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/terminal/browser/x
  import type { IBuffer, ITerminalOptions, ITheme, Terminal as RawXtermTerminal, LogLevel as XtermLogLevel, IMarker as IXtermMarker } from '@xterm/xterm';
  import type { ISearchOptions, SearchAddon as SearchAddonType } from '@xterm/addon-search';
  import type { Unicode11Addon as Unicode11AddonType } from '@xterm/addon-unicode11';
-@@ -50,6 +51,7 @@ import { isNumber } from '../../../../..
+@@ -50,6 +51,8 @@ import { isNumber } from '../../../../..
  import { clamp } from '../../../../../base/common/numbers.js';
  import { LayoutSettings } from '../../../../services/layout/browser/layoutService.js';
  import { ILifecycleService } from '../../../../services/lifecycle/common/lifecycle.js';
++import { TerminalTouchSelection } from './terminalTouchSelection.js';
 +import { registerTerminalTouchCoordinates } from './terminalTouchCoordinates.js';
  import { updateTerminalFontRendering } from './terminalFontRendering.js';
  
  const enum RenderConstants {
-@@ -521,6 +523,8 @@ export class XtermTerminal extends Dispo
+@@ -521,6 +524,9 @@ export class XtermTerminal extends Dispo
  
  		const ad = this._attachedDisposables;
  		ad.clear();
 +		ad.add(registerMobileKeyboardInput(this.raw.textarea));
 +		ad.add(registerTerminalTouchCoordinates(this.raw.element));
++		ad.add(new TerminalTouchSelection(this.raw, this._notificationService));
  		ad.add(dom.addDisposableListener(this.raw.textarea, 'focus', () => this._setFocused(true)));
  		ad.add(dom.addDisposableListener(this.raw.textarea, 'blur', () => this._setFocused(false)));
  		ad.add(dom.addDisposableListener(this.raw.textarea, 'focusout', () => this._setFocused(false)));
@@ -741,3 +1000,695 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/terminal/browser/x
 +	}, true));
 +	return disposables;
 +}
+Index: madlik-code-server/lib/vscode/src/vs/base/browser/mobileFontScale.ts
+===================================================================
+--- /dev/null
++++ madlik-code-server/lib/vscode/src/vs/base/browser/mobileFontScale.ts
+@@ -0,0 +1,12 @@
++/*---------------------------------------------------------------------------------------------
++ * Copyright (c) Madlik. All rights reserved.
++ * Licensed under the MIT License. See License.txt in the project root.
++ *--------------------------------------------------------------------------------------------*/
++import { Emitter } from '../common/event.js';
++const scales = new WeakMap<Window, number>();
++const changed = new Emitter<Window>();
++export const onDidChangeMobileFontScale = changed.event;
++export function getMobileFontScale(window: Window): number { return scales.get(window) ?? 1; }
++export function setMobileFontScale(window: Window, scale: number): void {
++	if (getMobileFontScale(window) !== scale) { scales.set(window, scale); changed.fire(window); }
++}
+Index: madlik-code-server/lib/vscode/src/vs/editor/browser/config/editorConfiguration.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/editor/browser/config/editorConfiguration.ts
++++ madlik-code-server/lib/vscode/src/vs/editor/browser/config/editorConfiguration.ts
+@@ -3,6 +3,7 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
++import { getMobileFontScale, onDidChangeMobileFontScale } from '../../../base/browser/mobileFontScale.js';
+ import * as browser from '../../../base/browser/browser.js';
+ import * as arrays from '../../../base/common/arrays.js';
+ import { Emitter, Event } from '../../../base/common/event.js';
+@@ -91,6 +92,9 @@ export class EditorConfiguration extends
+ 			this._containerObserver.startObserving();
+ 		}
+ 
++		this._register(onDidChangeMobileFontScale(window => {
++			if (window === getWindowById(this._targetWindowId, true).window) { this._recomputeOptions(); }
++		}));
+ 		this._register(EditorZoom.onDidChangeZoomLevel(() => this._recomputeOptions()));
+ 		this._register(TabFocus.onDidChangeTabFocus(() => this._recomputeOptions()));
+ 		this._register(this._containerObserver.onDidChange(() => this._recomputeOptions()));
+@@ -115,7 +119,7 @@ export class EditorConfiguration extends
+ 
+ 	private _computeOptions(): ComputedEditorOptions {
+ 		const partialEnv = this._readEnvConfiguration();
+-		const bareFontInfo = createBareFontInfoFromValidatedSettings(this._validatedOptions, partialEnv.pixelRatio, this.isSimpleWidget);
++		const bareFontInfo = createBareFontInfoFromValidatedSettings(this._validatedOptions, partialEnv.pixelRatio, this.isSimpleWidget, getMobileFontScale(getWindowById(this._targetWindowId, true).window));
+ 		const fontInfo = this._readFontInfo(bareFontInfo);
+ 		const env: IEnvironmentalOptions = {
+ 			memory: this._computeOptionsMemory,
+Index: madlik-code-server/lib/vscode/src/vs/editor/common/config/fontInfoFromSettings.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/editor/common/config/fontInfoFromSettings.ts
++++ madlik-code-server/lib/vscode/src/vs/editor/common/config/fontInfoFromSettings.ts
+@@ -6,14 +6,15 @@
+ import { EditorOption, EditorOptions } from './editorOptions.js';
+ import { IValidatedEditorOptions, BareFontInfo } from './fontInfo.js';
+ 
+-export function createBareFontInfoFromValidatedSettings(options: IValidatedEditorOptions, pixelRatio: number, ignoreEditorZoom: boolean): BareFontInfo {
++export function createBareFontInfoFromValidatedSettings(options: IValidatedEditorOptions, pixelRatio: number, ignoreEditorZoom: boolean, fontScale: number = 1): BareFontInfo {
+ 	const fontFamily = options.get(EditorOption.fontFamily);
+ 	const fontWeight = options.get(EditorOption.fontWeight);
+-	const fontSize = options.get(EditorOption.fontSize);
++	const fontSize = options.get(EditorOption.fontSize) * fontScale;
+ 	const fontFeatureSettings = options.get(EditorOption.fontLigatures);
+ 	const fontVariationSettings = options.get(EditorOption.fontVariations);
+-	const lineHeight = options.get(EditorOption.lineHeight);
+-	const letterSpacing = options.get(EditorOption.letterSpacing);
++	const configuredLineHeight = options.get(EditorOption.lineHeight);
++	const lineHeight = configuredLineHeight >= 8 ? configuredLineHeight * fontScale : configuredLineHeight;
++	const letterSpacing = options.get(EditorOption.letterSpacing) * fontScale;
+ 	return BareFontInfo._create(fontFamily, fontWeight, fontSize, fontFeatureSettings, fontVariationSettings, lineHeight, letterSpacing, pixelRatio, ignoreEditorZoom);
+ }
+ 
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/mobileFonts.ts
+===================================================================
+--- /dev/null
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/mobileFonts.ts
+@@ -0,0 +1,50 @@
++/*---------------------------------------------------------------------------------------------
++ * Copyright (c) Madlik. All rights reserved.
++ * Licensed under the MIT License. See License.txt in the project root.
++ *--------------------------------------------------------------------------------------------*/
++import { createStyleSheet } from '../../../../base/browser/domStylesheets.js';
++import { setMobileFontScale } from '../../../../base/browser/mobileFontScale.js';
++import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
++
++/** Scale absolute UI font declarations, leaving inherited/em sizes proportional.
++ * Native editor/xterm metrics use the same window-local scale separately.
++ * Styles belong to the compiled workbench contribution, with no proxy injection.
++ */
++export class MobileFonts extends Disposable {
++	private readonly style: HTMLStyleElement;
++	private active = false;
++	constructor(private readonly window: Window) {
++		super();
++		this.style = createStyleSheet(window.document.head);
++		this._register(toDisposable(() => { this.setActive(false); this.style.remove(); }));
++	}
++	setActive(active: boolean): void {
++		this.active = active;
++		if (active) { this.refresh(); }
++		this.window.document.body.classList.toggle('madlik-mobile-fonts', active);
++		setMobileFontScale(this.window, active ? 0.75 : 1);
++	}
++	refresh(): void {
++		if (!this.active) { return; }
++		const collect = (rules: CSSRuleList): string => Array.from(rules, rule => {
++			if (rule.type === 1) {
++				const styleRule = rule as CSSStyleRule;
++				const size = styleRule.style.getPropertyValue('font-size');
++				if (!/(?:px|rem|var\()/.test(size)) { return ''; }
++				const selectors = `:where(body.madlik-mobile-fonts) :is(${styleRule.selectorText})`;
++				const priority = styleRule.style.getPropertyPriority('font-size') ? ' !important' : '';
++				return `${selectors}{font-size:calc((${size}) * 0.75)${priority}}`;
++			}
++			if (rule.type === 4 || rule.type === 12) {
++				const group = rule as CSSMediaRule | CSSSupportsRule;
++				return `${rule.type === 4 ? '@media' : '@supports'} ${group.conditionText}{${collect(group.cssRules)}}`;
++			}
++			return '';
++		}).join('\n');
++		const text = Array.from(this.window.document.styleSheets, sheet => {
++			if (sheet === this.style.sheet || sheet.disabled) { return ''; }
++			try { return collect(sheet.cssRules); } catch { return ''; } // Cross-origin styles are outside our workbench.
++		}).join('\n');
++		if (text !== this.style.textContent) { this.style.textContent = text; }
++	}
++}
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/terminal/browser/terminalConfigurationService.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/workbench/contrib/terminal/browser/terminalConfigurationService.ts
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/terminal/browser/terminalConfigurationService.ts
+@@ -3,6 +3,7 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
++import { getMobileFontScale } from '../../../../base/browser/mobileFontScale.js';
+ import { Emitter, Event } from '../../../../base/common/event.js';
+ import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
+ import { type IEditorOptions } from '../../../../editor/common/config/editorOptions.js';
+@@ -148,6 +149,8 @@ export class TerminalFontMetrics extends
+ 			}
+ 		}
+ 
++		fontSize *= getMobileFontScale(w);
++
+ 		// Always fallback to monospace, otherwise a proportional font may become the default
+ 		fontFamily += ', monospace';
+ 
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/terminal/browser/terminalInstance.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/workbench/contrib/terminal/browser/terminalInstance.ts
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/terminal/browser/terminalInstance.ts
+@@ -3,6 +3,7 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
++import { onDidChangeMobileFontScale } from '../../../../base/browser/mobileFontScale.js';
+ import { isFirefox } from '../../../../base/browser/browser.js';
+ import { BrowserFeatures } from '../../../../base/browser/canIUse.js';
+ import { DataTransfers } from '../../../../base/browser/dnd.js';
+@@ -597,6 +598,12 @@ export class TerminalInstance extends Di
+ 			}
+ 		});
+ 
++		this._register(onDidChangeMobileFontScale(window => {
++			if (dom.getWindow(this._container) === window) {
++				this._layoutSettingsChanged = true;
++				void this._resize();
++			}
++		}));
+ 		this._register(this._configurationService.onDidChangeConfiguration(async e => {
+ 			if (e.affectsConfiguration(AccessibilityVerbositySettingId.Terminal)) {
+ 				this._setAriaLabel(this.xterm?.raw, this._instanceId, this.title);
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/terminal/browser/xterm/terminalTouchSelection.ts
+===================================================================
+--- /dev/null
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/terminal/browser/xterm/terminalTouchSelection.ts
+@@ -0,0 +1,290 @@
++/*---------------------------------------------------------------------------------------------
++ * Copyright (c) Madlik. All rights reserved.
++ * Licensed under the MIT License. See License.txt in the project root.
++ *--------------------------------------------------------------------------------------------*/
++import type { Terminal } from '@xterm/xterm';
++import { addDisposableListener, getWindow } from '../../../../../base/browser/dom.js';
++import { getMobileFontScale, onDidChangeMobileFontScale } from '../../../../../base/browser/mobileFontScale.js';
++import { Disposable, toDisposable } from '../../../../../base/common/lifecycle.js';
++import { INotificationService } from '../../../../../platform/notification/common/notification.js';
++
++interface Finger { id: number; x: number; y: number; originX: number; originY: number; time: number; velocity: number; scrolling: boolean; selecting: boolean; }
++
++/** Mobile gestures select the real xterm buffer. The native renderer draws the
++ * selection; only its touch handles and contextual clipboard buttons are ours.
++ * Scroll gestures are forwarded to the existing xterm mouse/viewport handler.
++ */
++export class TerminalTouchSelection extends Disposable {
++	private readonly window: ReturnType<typeof getWindow>;
++	private readonly element: HTMLElement;
++	private readonly screen: HTMLElement;
++	private readonly ui: HTMLDivElement;
++	private readonly menu: HTMLDivElement;
++	private readonly copyButton: HTMLButtonElement;
++	private readonly startHandle: HTMLButtonElement;
++	private readonly endHandle: HTMLButtonElement;
++	private readonly fallback: HTMLDialogElement;
++	private readonly pasteText: HTMLTextAreaElement;
++	private finger: Finger | undefined;
++	private pressTimer: number | undefined;
++	private frame: number | undefined;
++	private selected = false;
++	private generation = 0;
++	private anchor = { x: 0, y: 0 };
++
++	constructor(private readonly terminal: Terminal, private readonly notifications: INotificationService) {
++		super();
++		this.element = terminal.element!;
++		this.screen = terminal.screenElement!;
++		this.window = getWindow(this.element);
++		const document = this.element.ownerDocument;
++		this.ui = document.createElement('div'); this.ui.className = 'madlik-terminal-touch-ui'; this.ui.hidden = true;
++		this.menu = document.createElement('div'); this.menu.className = 'madlik-terminal-touch-menu'; this.menu.setAttribute('role', 'toolbar'); this.menu.setAttribute('aria-label', 'Terminal text selection');
++		this.startHandle = this.handle('start', 'Selection start');
++		this.endHandle = this.handle('end', 'Selection end');
++		this.copyButton = this.button('copy', 'Copy', () => this.copy());
++		this.button('paste', 'Paste', () => this.paste());
++		this.button('cancel', 'Cancel', () => this.close());
++		// A native dialog outside xterm is an ordinary editable browser surface.
++		// Terminal focus handlers and touch/callout rules must not own its input.
++		this.fallback = document.createElement('dialog'); this.fallback.className = 'madlik-terminal-paste-dialog'; this.fallback.hidden = true;
++		this.fallback.setAttribute('aria-label', 'Paste text into terminal');
++		const title = document.createElement('h2'); title.textContent = 'Paste into terminal';
++		const hint = document.createElement('p'); hint.textContent = 'Paste text into the field using the system menu (Ctrl+V / ⌘V on desktop), then confirm below.';
++		this.pasteText = document.createElement('textarea'); this.pasteText.setAttribute('aria-label', 'Text to paste'); this.pasteText.spellcheck = false;
++		this.pasteText.placeholder = 'Tap here and paste from your clipboard…';
++		const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = 'Paste into terminal'; confirm.dataset.terminalPasteConfirm = 'true'; confirm.disabled = true;
++		this._register(addDisposableListener(this.pasteText, 'input', () => { confirm.disabled = !this.pasteText.value; }));
++		this._register(addDisposableListener(confirm, 'click', () => { const text = this.pasteText.value; if (!text) { return; } this.close(); terminal.paste(text); }));
++		const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancel';
++		this._register(addDisposableListener(cancel, 'click', () => this.close()));
++		this._register(addDisposableListener(this.fallback, 'cancel', event => { event.preventDefault(); this.close(); }));
++		// Keep VS Code shortcuts out while retaining native editing/paste defaults.
++		this._register(addDisposableListener(this.fallback, 'keydown', event => event.stopPropagation()));
++		this.fallback.append(title, hint, this.pasteText, confirm, cancel); document.body.appendChild(this.fallback);
++		this.ui.append(this.startHandle, this.endHandle, this.menu); this.element.appendChild(this.ui);
++		// Clipboard controls are not terminal mouse input, including ANY reporting.
++		// Let the editable fallback keep the browser's own context menu.
++		for (const type of ['mousedown', 'mouseup', 'mousemove', 'click', 'contextmenu', 'touchstart', 'touchmove', 'touchend']) {
++			this._register(addDisposableListener(this.ui, type, event => event.stopPropagation()));
++		}
++		this._register(addDisposableListener(this.element, 'touchstart', event => this.touchStart(event), { capture: true, passive: false }));
++		this._register(addDisposableListener(this.element, 'touchmove', event => this.touchMove(event), { capture: true, passive: false }));
++		this._register(addDisposableListener(this.element, 'touchend', event => this.touchEnd(event), { capture: true, passive: false }));
++		this._register(addDisposableListener(this.element, 'touchcancel', () => this.cancelGesture(), true));
++		this._register(addDisposableListener(this.element, 'contextmenu', event => {
++			if (!this.enabled || this.ui.contains(event.target as Node)) { return; }
++			event.preventDefault(); event.stopImmediatePropagation(); this.cancelGesture(); this.selectWord(event.clientX, event.clientY);
++		}, true));
++		this._register(addDisposableListener(this.screen, '-xterm-gesturecontextmenu', event => { if (this.enabled) { event.preventDefault(); event.stopImmediatePropagation(); } }, true));
++		this._register(addDisposableListener(document, 'pointerdown', event => { if (this.enabled && !this.element.contains(event.target as Node) && !this.fallback.contains(event.target as Node)) { this.cancelGesture(); this.close(); } }, true));
++		this._register(terminal.onScroll(() => this.draw()));
++		this._register(terminal.onSelectionChange(() => this.draw()));
++		let columns = terminal.cols;
++		this._register(terminal.onResize(size => {
++			if (size.cols !== columns && this.fallback.hidden) { this.close(); } else { this.draw(); this.window.requestAnimationFrame(() => this.draw()); }
++			columns = size.cols;
++		}));
++		this._register(terminal.buffer.onBufferChange(() => this.close()));
++		this._register(onDidChangeMobileFontScale(window => { if (window === this.window) { this.cancelGesture(); this.close(); } }));
++		this._register(toDisposable(() => { this.cancelGesture(); this.close(); this.ui.remove(); this.fallback.remove(); }));
++	}
++	private get enabled(): boolean { return getMobileFontScale(this.window) < 1; }
++	private stop(event: TouchEvent): void { event.preventDefault(); event.stopImmediatePropagation(); }
++	private touchStart(event: TouchEvent): void {
++		if (!this.enabled) { return; }
++		if (this.ui.contains(event.target as Node)) { return; }
++		if (event.touches.length !== 1) { this.cancelGesture(); return; }
++		this.stop(event); this.cancelGesture();
++		const touch = event.touches[0];
++		this.finger = { id: touch.identifier, x: touch.clientX, y: touch.clientY, originX: touch.clientX, originY: touch.clientY, time: this.window.performance.now(), velocity: 0, scrolling: false, selecting: false };
++		this.pressTimer = this.window.setTimeout(() => {
++			this.pressTimer = undefined;
++			if (this.finger && !this.finger.scrolling) { this.finger.selecting = true; this.selectWord(this.finger.x, this.finger.y); }
++		}, 450);
++	}
++	private touchMove(event: TouchEvent): void {
++		if (!this.enabled) { return; }
++		if (this.ui.contains(event.target as Node)) { return; }
++		if (!this.finger) { return; }
++		this.stop(event);
++		const finger = this.finger, touch = Array.from(event.changedTouches).find(touch => touch.identifier === finger.id);
++		if (!touch || finger.selecting) { return; }
++		const now = this.window.performance.now(), delta = touch.clientY - finger.y;
++		if (!finger.scrolling && Math.hypot(touch.clientX - finger.originX, touch.clientY - finger.originY) > 10) {
++			this.clearPress(); this.close(); finger.scrolling = true;
++			this.gesture('-xterm-gesturestart', touch.clientX, touch.clientY, 0);
++		}
++		if (finger.scrolling) {
++			finger.velocity = delta / Math.max(1, now - finger.time);
++			this.gesture('-xterm-gesturechange', touch.clientX, touch.clientY, delta);
++		}
++		finger.x = touch.clientX; finger.y = touch.clientY; finger.time = now;
++	}
++	private touchEnd(event: TouchEvent): void {
++		if (!this.enabled) { return; }
++		if (this.ui.contains(event.target as Node)) { return; }
++		if (!this.finger) { return; }
++		const finger = this.finger;
++		if (!Array.from(event.changedTouches).some(touch => touch.identifier === finger.id)) { return; }
++		this.stop(event); this.clearPress(); this.finger = undefined;
++		if (finger.scrolling) { this.inertia(finger); }
++		else if (!finger.selecting) {
++			if (this.selected) { this.close(); }
++			else {
++				// Replay a normal tap through xterm's own mouse handling.
++				for (const type of ['mousedown', 'mouseup', 'click']) { this.screen.dispatchEvent(new this.window.MouseEvent(type, { bubbles: true, clientX: finger.x, clientY: finger.y, button: 0 })); }
++			}
++		}
++	}
++	private gesture(type: string, x: number, y: number, translationY: number): void {
++		const event = new this.window.Event(type, { cancelable: true });
++		Object.assign(event, { clientX: x, clientY: y, pageX: x + this.window.scrollX, pageY: y + this.window.scrollY, translationX: 0, translationY });
++		this.screen.dispatchEvent(event);
++	}
++	private inertia(finger: Finger): void {
++		let velocity = Math.max(-3, Math.min(3, finger.velocity)), previous = this.window.performance.now();
++		const began = previous;
++		const tick = (now: number) => {
++			this.frame = undefined;
++			if (!this.enabled || now - began > 700 || Math.abs(velocity) < 0.02) { return; }
++			const delta = Math.min(32, now - previous); previous = now;
++			velocity *= Math.exp(-delta / 120);
++			this.gesture('-xterm-gesturechange', finger.x, finger.y, velocity * delta);
++			this.frame = this.window.requestAnimationFrame(tick);
++		};
++		if (Math.abs(velocity) > 0.05) { this.frame = this.window.requestAnimationFrame(tick); }
++	}
++	private point(x: number, y: number): { column: number; row: number } {
++		const rect = this.screen.getBoundingClientRect();
++		return { column: Math.max(0, Math.min(this.terminal.cols - 1, Math.floor((x - rect.left) * this.terminal.cols / rect.width))), row: this.terminal.buffer.active.viewportY + Math.max(0, Math.min(this.terminal.rows - 1, Math.floor((y - rect.top) * this.terminal.rows / rect.height))) };
++	}
++	private selectWord(x: number, y: number): void {
++		this.terminal.textarea?.blur();
++		const point = this.point(x, y), line = this.terminal.buffer.active.getLine(point.row);
++		if (!line) { this.anchor = { x, y }; this.selected = true; this.ui.hidden = false; this.terminal.clearSelection(); this.draw(); return; }
++		let start = point.column, end = start + 1;
++		const word = (column: number) => { const cell = line.getCell(column), chars = cell?.getChars(); return !!cell && (cell.getWidth() === 0 || (!!chars && !/\s/u.test(chars) && !/[,.();:!?]/u.test(chars))); };
++		if (word(start)) { while (start > 0 && word(start - 1)) { start--; } while (end < this.terminal.cols && word(end)) { end++; } }
++		this.anchor = { x, y }; this.selected = true; this.ui.hidden = false;
++		this.terminal.select(start, point.row, end - start); this.draw();
++	}
++	private handle(which: 'start' | 'end', label: string): HTMLButtonElement {
++		const handle = this.element.ownerDocument.createElement('button'); handle.type = 'button'; handle.className = 'madlik-terminal-touch-handle'; handle.setAttribute('aria-label', label); handle.dataset.terminalHandle = which;
++		let drag: { pointerId: number; fixed: number; edge: 'start' | 'end'; offsetX: number; offsetY: number } | undefined;
++		this._register(addDisposableListener(handle, 'pointerdown', event => {
++			const range = this.terminal.getSelectionPosition(); if (!range) { return; }
++			event.preventDefault(); event.stopPropagation();
++			// Short words have overlapping touch targets. Resolve the nearer knob,
++			// even when the other button happens to be above it in stacking order.
++			const distance = (button: HTMLButtonElement) => { const box = button.getBoundingClientRect(); return Math.hypot(event.clientX - box.left - 22, event.clientY - box.top - 15); };
++			const edge = this.startHandle.hidden ? 'end' : this.endHandle.hidden ? 'start' : distance(this.startHandle) < distance(this.endHandle) ? 'start' : 'end';
++			const rect = this.screen.getBoundingClientRect();
++			const hit = edge === 'start' ? range.start.y * this.terminal.cols + range.start.x : range.end.y * this.terminal.cols + range.end.x - 1;
++			drag = {
++				pointerId: event.pointerId, edge,
++				fixed: edge === 'start' ? range.end.y * this.terminal.cols + range.end.x : range.start.y * this.terminal.cols + range.start.x,
++				offsetX: rect.left + (hit % this.terminal.cols + 0.5) * rect.width / this.terminal.cols - event.clientX,
++				offsetY: rect.top + (Math.floor(hit / this.terminal.cols) - this.terminal.buffer.active.viewportY + 0.5) * rect.height / this.terminal.rows - event.clientY
++			};
++			handle.setPointerCapture(event.pointerId);
++		}));
++		this._register(addDisposableListener(handle, 'pointermove', event => {
++			if (!drag || drag.pointerId !== event.pointerId) { return; }
++			event.preventDefault(); event.stopPropagation();
++			const rect = this.screen.getBoundingClientRect(), x = event.clientX + drag.offsetX, y = event.clientY + drag.offsetY;
++			if (y < rect.top) { this.terminal.scrollLines(-1); }
++			else if (y > rect.bottom) { this.terminal.scrollLines(1); }
++			const point = this.point(x, y), moving = point.row * this.terminal.cols + point.column + (drag.edge === 'end' ? 1 : 0);
++			const start = Math.min(moving, drag.fixed), end = Math.max(moving, drag.fixed);
++			this.terminal.select(start % this.terminal.cols, Math.floor(start / this.terminal.cols), Math.max(1, end - start));
++		}));
++		const end = () => { drag = undefined; };
++		this._register(addDisposableListener(handle, 'pointerup', end)); this._register(addDisposableListener(handle, 'pointercancel', end));
++		return handle;
++	}
++	private button(action: string, label: string, run: () => void): HTMLButtonElement {
++		const button = this.element.ownerDocument.createElement('button'); button.type = 'button'; button.textContent = label; button.dataset.terminalClipboard = action;
++		let touch: { x: number; y: number } | undefined, lastTouch = -Infinity;
++		this._register(addDisposableListener(button, 'pointerdown', event => {
++			if (event.pointerType === 'mouse') { lastTouch = -Infinity; }
++		}));
++		this._register(addDisposableListener(button, 'touchstart', event => {
++			const point = event.touches.length === 1 ? event.touches[0] : undefined;
++			touch = point ? { x: point.clientX, y: point.clientY } : undefined;
++		}, { passive: true }));
++		this._register(addDisposableListener(button, 'touchcancel', () => { touch = undefined; }));
++		this._register(addDisposableListener(button, 'touchend', event => {
++			const point = event.changedTouches[0], origin = touch; touch = undefined;
++			if (!origin || !point || Math.hypot(point.clientX - origin.x, point.clientY - origin.y) > 10) { return; }
++			// Run inside the trusted touch gesture. Compatibility click is not
++			// reliable after dragging a selection handle, and may arrive late.
++			event.preventDefault(); lastTouch = this.window.performance.now(); run();
++		}, { passive: false }));
++		this._register(addDisposableListener(button, 'click', event => {
++			if (event.detail === 0 || this.window.performance.now() - lastTouch > 1000) { run(); }
++		})); this.menu.appendChild(button); return button;
++	}
++	private draw(): void {
++		if (!this.selected) { return; }
++		const range = this.terminal.getSelectionPosition();
++		this.copyButton.disabled = !this.terminal.getSelection();
++		this.startHandle.hidden = !range; this.endHandle.hidden = !range;
++		const screen = this.screen.getBoundingClientRect(), root = this.element.getBoundingClientRect(), cellW = screen.width / this.terminal.cols, cellH = screen.height / this.terminal.rows;
++		if (range) { for (const [handle, position] of [[this.startHandle, range.start], [this.endHandle, range.end]] as const) {
++			const row = position.y - this.terminal.buffer.active.viewportY;
++			handle.hidden = row < 0 || row >= this.terminal.rows;
++			handle.style.left = `${screen.left - root.left + Math.min(this.terminal.cols, position.x) * cellW}px`;
++			handle.style.top = `${Math.max(8, Math.min(root.height - 36, screen.top - root.top + (row + 1) * cellH))}px`;
++		}
++		}
++		this.menu.hidden = !this.fallback.hidden;
++		this.menu.style.left = `${Math.max(0, Math.min(root.width - this.menu.offsetWidth, this.anchor.x - root.left - this.menu.offsetWidth / 2))}px`;
++		const above = this.anchor.y - root.top - 54;
++		const menuTop = above >= 0 ? above : this.anchor.y - root.top + cellH + 32;
++		this.menu.style.top = `${Math.max(0, Math.min(root.height - 48, menuTop))}px`;
++	}
++	private copy(): void {
++		const text = this.terminal.getSelection(), generation = this.generation;
++		if (!text) { this.notifications.info('Select text using the handles.'); return; }
++		// Prefer the browser's native copy event, also used by xterm. It does
++		// not require clipboard.read/write permission. Scope the payload to
++		// this synchronous command; never leave a global clipboard listener.
++		const document = this.element.ownerDocument;
++		let supplied = false;
++		const listener = (event: ClipboardEvent) => {
++			if (!event.clipboardData) { return; }
++			event.clipboardData.setData('text/plain', text);
++			event.preventDefault(); event.stopImmediatePropagation(); supplied = true;
++		};
++		document.addEventListener('copy', listener, true);
++		let copied = false;
++		try { copied = document.execCommand('copy') && supplied; } catch { /* Try Clipboard API below. */ }
++		finally { document.removeEventListener('copy', listener, true); }
++		if (copied) { this.close(); return; }
++		try {
++			this.window.navigator.clipboard.writeText(text).then(() => {
++				if (generation === this.generation) { this.close(); }
++			}, error => this.notifications.error(`Could not copy to the clipboard: ${error instanceof Error ? error.message : String(error)}`));
++		} catch (error) { this.notifications.error(`Could not copy to the clipboard: ${String(error)}`); }
++	}
++	private paste(): void {
++		this.cancelGesture(); this.close();
++		this.pasteText.value = '';
++		const confirm = this.fallback.querySelector<HTMLButtonElement>('[data-terminal-paste-confirm]');
++		if (confirm) { confirm.disabled = true; }
++		this.fallback.hidden = false;
++		this.fallback.showModal();
++		// Synchronous inside the user gesture: allow Safari to open the keyboard
++		// and its own context menu for this standard, unregistered textarea.
++		this.pasteText.focus({ preventScroll: true });
++	}
++	private clearPress(): void { if (this.pressTimer !== undefined) { this.window.clearTimeout(this.pressTimer); this.pressTimer = undefined; } }
++	private cancelGesture(): void { this.clearPress(); this.finger = undefined; if (this.frame !== undefined) { this.window.cancelAnimationFrame(this.frame); this.frame = undefined; } }
++	private close(): void {
++		const owned = this.selected;
++		if (this.fallback.open) { this.fallback.close(); }
++		this.generation++; this.selected = false; this.ui.hidden = true; this.fallback.hidden = true; this.menu.hidden = false; this.pasteText.blur(); this.pasteText.value = '';
++		if (owned) { this.terminal.clearSelection(); }
++	}
++}
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/mobileCodeInput.ts
+===================================================================
+--- /dev/null
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/mobileCodeInput.ts
+@@ -0,0 +1,33 @@
++/*---------------------------------------------------------------------------------------------
++ * Copyright (c) Madlik. All rights reserved.
++ * Licensed under the MIT License. See License.txt in the project root.
++ *--------------------------------------------------------------------------------------------*/
++import { CodeKey } from './mobileCodeKeyboard.js';
++
++/** Encode terminal input directly; synthetic DOM keyboard events are not terminal input. */
++export function terminalCodeKey({ key, ctrl, alt, shift }: CodeKey, applicationCursor: boolean): string | undefined {
++ const modifier = 1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0);
++ const cursor: Record<string, string> = { '{left}': 'D', '{down}': 'B', '{up}': 'A', '{right}': 'C', '{home}': 'H', '{end}': 'F' };
++ if (cursor[key]) { return modifier > 1 ? `\x1b[1;${modifier}${cursor[key]}` : `\x1b${applicationCursor ? 'O' : '['}${cursor[key]}`; }
++ const fn = /^\{f(\d+)\}$/.exec(key);
++ if (fn) {
++  const number = Number(fn[1]);
++  if (number <= 4) { const final = 'PQRS'[number - 1]; return modifier > 1 ? `\x1b[1;${modifier}${final}` : `\x1bO${final}`; }
++  const code = [15, 17, 18, 19, 20, 21, 23, 24][number - 5];
++  return code ? `\x1b[${code}${modifier > 1 ? `;${modifier}` : ''}~` : undefined;
++ }
++ const tilde: Record<string, number> = { '{delete}': 3, '{pgup}': 5, '{pgdn}': 6 };
++ if (tilde[key]) { return `\x1b[${tilde[key]}${modifier > 1 ? `;${modifier}` : ''}~`; }
++ const plain: Record<string, string> = { '{space}': ' ', '{enter}': '\r', '{bksp}': '\x7f', '{tab}': shift ? '\x1b[Z' : '\t', '{esc}': '\x1b' };
++ let text = plain[key] ?? (key.startsWith('{') && key.length > 1 ? undefined : key);
++ // A literal opening brace is a normal printable key.
++ if (key === '{') { text = key; }
++ if (text === undefined) { return undefined; }
++ if (ctrl && text.length === 1) {
++  const code = text.toUpperCase().charCodeAt(0);
++  if (text === ' ' || text === '@') { text = '\0'; }
++  else if (code >= 64 && code <= 95) { text = String.fromCharCode(code - 64); }
++  else if (text === '?') { text = '\x7f'; }
++ }
++ return (alt ? '\x1b' : '') + text;
++}
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/mobileCodeKeyboard.ts
+===================================================================
+--- /dev/null
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/mobileCodeKeyboard.ts
+@@ -0,0 +1,97 @@
++/*---------------------------------------------------------------------------------------------
++ * Copyright (c) Madlik. All rights reserved.
++ * Licensed under the MIT License. See License.txt in the project root.
++ *--------------------------------------------------------------------------------------------*/
++import SimpleKeyboard from './vendor/simpleKeyboard.js';
++import { addDisposableListener } from '../../../../base/browser/dom.js';
++import { Disposable } from '../../../../base/common/lifecycle.js';
++
++export interface CodeKey { key: string; ctrl: boolean; alt: boolean; shift: boolean; }
++
++/** Simple-keyboard supplies the touch UI; callers route keys to native VS Code components. */
++export class MobileCodeKeyboard extends Disposable {
++ readonly element: HTMLDivElement;
++ private readonly keys: HTMLDivElement;
++ private readonly tabs = new Map<string, HTMLButtonElement>();
++ private instance: SimpleKeyboard | undefined;
++ private layer = 'abc';
++ private shift = false;
++ private ctrl = false;
++ private alt = false;
++ private held: CodeKey | undefined;
++ private previousPointerUp: ((this: GlobalEventHandlers, event: PointerEvent) => any) | null = null;
++ constructor(private readonly document: Document, private readonly send: (key: CodeKey) => void, private readonly resized: () => void) {
++  super();
++  this.element = document.createElement('div'); this.element.className = 'madlik-code-keyboard'; this.element.hidden = true;
++  this.element.setAttribute('aria-label', 'Code keyboard');
++  const toolbar = document.createElement('div'); toolbar.className = 'madlik-code-keyboard-toolbar';
++  for (const [id, label] of [['abc', 'ABC'], ['numbers', '123'], ['symbols', '#+='], ['fn', 'Fn'], ['ctrl', 'Ctrl'], ['alt', 'Alt']]) {
++   const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.dataset.codeLayer = id;
++   this.tabs.set(id, button); toolbar.appendChild(button);
++   const activate = () => {
++    if (id === 'ctrl') { this.ctrl = !this.ctrl; } else if (id === 'alt') { this.alt = !this.alt; }
++    else { this.layer = id; this.shift = false; }
++    this.render();
++   };
++   this._register(addDisposableListener(button, 'pointerdown', event => { if (event.button === 0) { event.preventDefault(); activate(); } }));
++   this._register(addDisposableListener(button, 'click', event => { if (event.detail === 0) { activate(); } }));
++  }
++  // Capturing release also covers a key replaced by a shifted-layout render.
++  const released = () => { this.held = undefined; this.instance?.handleButtonMouseUp(); };
++  for (const type of ['pointerup', 'pointercancel', 'touchend', 'touchcancel', 'blur']) {
++   this._register(addDisposableListener(document.defaultView!, type, released, true));
++  }
++  this._register(addDisposableListener(this.element, 'selectstart', event => event.preventDefault()));
++  this._register(addDisposableListener(this.element, 'contextmenu', event => { event.preventDefault(); event.stopPropagation(); }));
++  this.keys = document.createElement('div'); this.keys.className = 'madlik-code-keyboard-keys';
++  this.element.append(toolbar, this.keys);
++ }
++ show(visible: boolean): void {
++  if (!visible) { this.held = undefined; this.instance?.handleButtonMouseUp(); }
++  this.element.hidden = !visible;
++  if (visible && !this.instance) {
++   this.previousPointerUp = this.document.onpointerup;
++   this.instance = new SimpleKeyboard(this.keys, {
++    theme: 'madlik-code-keyboard-keys', layoutName: 'abc',
++    layout: {
++     abc: ['q w e r t y u i o p', 'a s d f g h j k l', '{shift} z x c v b n m {bksp}', '{space} {enter}'],
++     upper: ['Q W E R T Y U I O P', 'A S D F G H J K L', '{shift} Z X C V B N M {bksp}', '{space} {enter}'],
++     numbers: ['1 2 3 4 5 6 7 8 9 0', '- / : ; ( ) $ & @', '{shift} . , ? ! \" \' {bksp}', '{space} {enter}'],
++     symbols: ['[ ] { } # % ^ * + =', '_ \\ | ~ < > € £ ¥', '{shift} . , ? ! ` \' {bksp}', '{space} {enter}'],
++     fn: ['{f1} {f2} {f3} {f4} {f5} {f6}', '{f7} {f8} {f9} {f10} {f11} {f12}', '{shift} {home} {end} {pgup} {pgdn} {delete}', '{space} {enter}'],
++    },
++    display: { '{shift}': '⇧', '{bksp}': '⌫', '{space}': 'space', '{enter}': 'return', '{home}': 'Home', '{end}': 'End', '{pgup}': 'PgUp', '{pgdn}': 'PgDn', '{delete}': 'Del', ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`{f${i + 1}}`, `F${i + 1}`])) },
++    useButtonTag: true, preventMouseDownDefault: true, stopMouseDownPropagation: true,
++    disableCaretPositioning: true, disableButtonHold: false,
++    onKeyPress: button => this.press(button, true),
++   });
++   this.render();
++  }
++ }
++ sendKey(key: string): void { this.press(key); }
++ private press(key: string, holdable = false): void {
++  if (key === '{shift}') {
++   if (this.layer === 'numbers') { this.layer = 'symbols'; } else if (this.layer === 'symbols') { this.layer = 'numbers'; }
++   else { this.shift = !this.shift; }
++   this.render(); return;
++  }
++  const stroke: CodeKey = holdable && this.held?.key === key ? this.held : { key, ctrl: this.ctrl, alt: this.alt, shift: this.shift };
++  if (holdable) { this.held = stroke; }
++  this.send(stroke);
++  this.ctrl = false; this.alt = false;
++  if (this.layer === 'abc') { this.shift = false; }
++  this.instance?.setInput(''); this.render();
++ }
++ private render(): void {
++  this.instance?.setOptions({ layoutName: this.layer === 'abc' && this.shift ? 'upper' : this.layer });
++  for (const [id, button] of this.tabs) { button.setAttribute('aria-pressed', String(id === 'ctrl' ? this.ctrl : id === 'alt' ? this.alt : this.layer === id)); }
++  this.keys.classList.toggle('madlik-shift-active', this.shift); this.resized();
++ }
++ reset(): void { this.ctrl = false; this.alt = false; this.shift = false; this.held = undefined; this.render(); }
++ deactivate(): void {
++  this.held = undefined;
++  if (this.instance) { this.instance.handleButtonMouseUp(); this.instance.destroy(); this.instance = undefined; this.document.onpointerup = this.previousPointerUp; }
++  this.element.hidden = true;
++ }
++ override dispose(): void { this.deactivate(); this.element.remove(); super.dispose(); }
++}
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/vendor/LICENSE.simple-keyboard
+===================================================================
+--- /dev/null
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/vendor/LICENSE.simple-keyboard
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2019 Francisco Hodge and project contributors.
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/vendor/README.simple-keyboard.md
+===================================================================
+--- /dev/null
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/vendor/README.simple-keyboard.md
+@@ -0,0 +1,8 @@
++Vendored simple-keyboard 3.8.194 (MIT), https://github.com/hodgef/simple-keyboard
++Source: npm simple-keyboard@3.8.194, build/index.modern.esm.js
++Original bundle SHA-256: a20ff1b97b3b3e54d5b6e6415940de524aca59d7eaa44161f47e877cc8abf070
++Local adaptation: replace the four innerHTML assignments with textContent.
++We use plain labels only; HTML labels/candidates are deliberately unsupported.
++This avoids HTML parsing and works under Trusted Types without a new policy,
++a default policy, or CSP changes. Source-map footer removed (map not bundled).
++No runtime CDN, remote scripts, telemetry or speech service.
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/vendor/simpleKeyboard.d.ts
+===================================================================
+--- /dev/null
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/vendor/simpleKeyboard.d.ts
+@@ -0,0 +1,19 @@
++export interface KeyboardOptions {
++ layout: Record<string, string[]>;
++ layoutName: string;
++ display: Record<string, string>;
++ theme: string;
++ useButtonTag: boolean;
++ preventMouseDownDefault: boolean;
++ stopMouseDownPropagation: boolean;
++ disableCaretPositioning: boolean;
++ disableButtonHold: boolean;
++ onKeyPress: (button: string) => void;
++}
++export default class SimpleKeyboard {
++ constructor(element: HTMLDivElement, options: KeyboardOptions);
++ setOptions(options: Partial<KeyboardOptions>): void;
++ setInput(value: string): void;
++ handleButtonMouseUp(): void;
++ destroy(): void;
++}
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/vendor/simpleKeyboard.js
+===================================================================
+--- /dev/null
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/vendor/simpleKeyboard.js
+@@ -0,0 +1,16 @@
++/*!
++ * 
++ *   simple-keyboard v3.8.194 (index.modern.esm.js - Modern Browsers bundle, ESM output)
++ *   https://github.com/hodgef/simple-keyboard
++ *
++ *   NOTE: This modern browsers bundle (index.modern.esm.js) removes all polyfills
++ *   included in the standard version. Use this if you are supporting
++ *   modern browsers only. Otherwise, use the standard version (index.js).
++ *
++ *   Copyright (c) Francisco Hodge (https://github.com/hodgef) and project contributors.
++ *
++ *   This source code is licensed under the MIT license found in the
++ *   LICENSE file in the root directory of this source tree.
++ *
++ */
++function t(t){return function(t){if(Array.isArray(t))return n(t)}(t)||function(t){if("undefined"!=typeof Symbol&&null!=t[Symbol.iterator]||null!=t["@@iterator"])return Array.from(t)}(t)||e(t)||function(){throw new TypeError("Invalid attempt to spread non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.")}()}function e(t,e){if(t){if("string"==typeof t)return n(t,e);var o={}.toString.call(t).slice(8,-1);return"Object"===o&&t.constructor&&(o=t.constructor.name),"Map"===o||"Set"===o?Array.from(t):"Arguments"===o||/^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(o)?n(t,e):void 0}}function n(t,e){(null==e||e>t.length)&&(e=t.length);for(var n=0,o=Array(e);n<e;n++)o[n]=t[n];return o}function o(t){return o="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},o(t)}function i(t,e){for(var n=0;n<e.length;n++){var o=e[n];o.enumerable=o.enumerable||!1,o.configurable=!0,"value"in o&&(o.writable=!0),Object.defineProperty(t,a(o.key),o)}}function s(t,e,n){return(e=a(e))in t?Object.defineProperty(t,e,{value:n,enumerable:!0,configurable:!0,writable:!0}):t[e]=n,t}function a(t){var e=function(t,e){if("object"!=o(t)||!t)return t;var n=t[Symbol.toPrimitive];if(void 0!==n){var i=n.call(t,e||"default");if("object"!=o(i))return i;throw new TypeError("@@toPrimitive must return a primitive value.")}return("string"===e?String:Number)(t)}(t,"string");return"symbol"==o(e)?e:e+""}var r=function(){return n=function t(e){var n=e.getOptions,o=e.getCaretPosition,i=e.getCaretPositionEnd,a=e.dispatch;!function(t,e){if(!(t instanceof e))throw new TypeError("Cannot call a class as a function")}(this,t),s(this,"getOptions",void 0),s(this,"getCaretPosition",void 0),s(this,"getCaretPositionEnd",void 0),s(this,"dispatch",void 0),s(this,"maxLengthReached",void 0),s(this,"isStandardButton",function(t){return t&&!("{"===t[0]&&"}"===t[t.length-1])}),this.getOptions=n,this.getCaretPosition=o,this.getCaretPositionEnd=i,this.dispatch=a,t.bindMethods(t,this)},a=[{key:"getButtonType",value:function(t){return t.includes("{")&&t.includes("}")&&"{//}"!==t?"functionBtn":"standardBtn"}},{key:"getButtonClass",value:function(t){var e=this.getButtonType(t),n=t.replace("{","").replace("}",""),o="";return"standardBtn"!==e&&(o=" hg-button-".concat(n)),"hg-".concat(e).concat(o)}},{key:"getDefaultDiplay",value:function(){return{"{bksp}":"backspace","{backspace}":"backspace","{enter}":"< enter","{shift}":"shift","{shiftleft}":"shift","{shiftright}":"shift","{alt}":"alt","{s}":"shift","{tab}":"tab","{lock}":"caps","{capslock}":"caps","{accept}":"Submit","{space}":" ","{//}":" ","{esc}":"esc","{escape}":"esc","{f1}":"f1","{f2}":"f2","{f3}":"f3","{f4}":"f4","{f5}":"f5","{f6}":"f6","{f7}":"f7","{f8}":"f8","{f9}":"f9","{f10}":"f10","{f11}":"f11","{f12}":"f12","{numpaddivide}":"/","{numlock}":"lock","{arrowup}":"↑","{arrowleft}":"←","{arrowdown}":"↓","{arrowright}":"→","{prtscr}":"print","{scrolllock}":"scroll","{pause}":"pause","{insert}":"ins","{home}":"home","{pageup}":"up","{delete}":"del","{forwarddelete}":"del","{end}":"end","{pagedown}":"down","{numpadmultiply}":"*","{numpadsubtract}":"-","{numpadadd}":"+","{numpadenter}":"enter","{period}":".","{numpaddecimal}":".","{numpad0}":"0","{numpad1}":"1","{numpad2}":"2","{numpad3}":"3","{numpad4}":"4","{numpad5}":"5","{numpad6}":"6","{numpad7}":"7","{numpad8}":"8","{numpad9}":"9"}}},{key:"getButtonDisplayName",value:function(t,e){return(e=arguments.length>2&&void 0!==arguments[2]&&arguments[2]?Object.assign({},this.getDefaultDiplay(),e):e||this.getDefaultDiplay())[t]||t}},{key:"getUpdatedInput",value:function(t,e,n){var o=arguments.length>3&&void 0!==arguments[3]?arguments[3]:n,i=arguments.length>4&&void 0!==arguments[4]&&arguments[4],s=this.getOptions(),a=[n,o,i],r=e;return("{bksp}"===t||"{backspace}"===t)&&r.length>0?r=this.removeAt.apply(this,[r].concat(a)):("{delete}"===t||"{forwarddelete}"===t)&&r.length>0?r=this.removeForwardsAt.apply(this,[r].concat(a)):"{space}"===t?r=this.addStringAt.apply(this,[r," "].concat(a)):"{tab}"!==t||"boolean"==typeof s.tabCharOnTab&&!1===s.tabCharOnTab?"{enter}"!==t&&"{numpadenter}"!==t||!s.newLineOnEnter?t.includes("numpad")&&Number.isInteger(Number(t[t.length-2]))?r=this.addStringAt.apply(this,[r,t[t.length-2]].concat(a)):"{numpaddivide}"===t?r=this.addStringAt.apply(this,[r,"/"].concat(a)):"{numpadmultiply}"===t?r=this.addStringAt.apply(this,[r,"*"].concat(a)):"{numpadsubtract}"===t?r=this.addStringAt.apply(this,[r,"-"].concat(a)):"{numpadadd}"===t?r=this.addStringAt.apply(this,[r,"+"].concat(a)):"{numpaddecimal}"===t?r=this.addStringAt.apply(this,[r,"."].concat(a)):"{"===t||"}"===t?r=this.addStringAt.apply(this,[r,t].concat(a)):t.includes("{")||t.includes("}")||(r=this.addStringAt.apply(this,[r,t].concat(a))):r=this.addStringAt.apply(this,[r,"\n"].concat(a)):r=this.addStringAt.apply(this,[r,"\t"].concat(a)),s.debug&&console.log("Input will be: "+r),r}},{key:"updateCaretPos",value:function(t){var e=arguments.length>1&&void 0!==arguments[1]&&arguments[1],n=this.updateCaretPosAction(t,e);this.dispatch(function(t){t.setCaretPosition(n)})}},{key:"updateCaretPosAction",value:function(t){var e=arguments.length>1&&void 0!==arguments[1]&&arguments[1],n=this.getOptions(),o=this.getCaretPosition();return null!=o&&(e?o>0&&(o-=t):o+=t),n.debug&&console.log("Caret at:",o),o}},{key:"addStringAt",value:function(t,e){var n,o=arguments.length>2&&void 0!==arguments[2]?arguments[2]:t.length,i=arguments.length>3&&void 0!==arguments[3]?arguments[3]:t.length,s=arguments.length>4&&void 0!==arguments[4]&&arguments[4];return o||0===o?(n=[t.slice(0,o),e,t.slice(i)].join(""),this.isMaxLengthReached()||s&&this.updateCaretPos(e.length)):n=t+e,n}},{key:"removeAt",value:function(t){var e,n=arguments.length>1&&void 0!==arguments[1]?arguments[1]:t.length,o=arguments.length>2&&void 0!==arguments[2]?arguments[2]:t.length,i=arguments.length>3&&void 0!==arguments[3]&&arguments[3];if(0===n&&0===o)return t;if(n===o){var s=/([\uD800-\uDBFF][\uDC00-\uDFFF])/g;n&&n>=0?t.substring(n-2,n).match(s)?(e=t.substr(0,n-2)+t.substr(n),i&&this.updateCaretPos(2,!0)):(e=t.substr(0,n-1)+t.substr(n),i&&this.updateCaretPos(1,!0)):t.slice(-2).match(s)?(e=t.slice(0,-2),i&&this.updateCaretPos(2,!0)):(e=t.slice(0,-1),i&&this.updateCaretPos(1,!0))}else e=t.slice(0,n)+t.slice(o),i&&this.dispatch(function(t){t.setCaretPosition(n)});return e}},{key:"removeForwardsAt",value:function(t){var e,n=arguments.length>1&&void 0!==arguments[1]?arguments[1]:t.length,o=arguments.length>2&&void 0!==arguments[2]?arguments[2]:t.length,i=arguments.length>3&&void 0!==arguments[3]&&arguments[3];return null!=t&&t.length&&null!==n?(n===o?e=t.substring(n,n+2).match(/([\uD800-\uDBFF][\uDC00-\uDFFF])/g)?t.substr(0,n)+t.substr(n+2):t.substr(0,n)+t.substr(n+1):(e=t.slice(0,n)+t.slice(o),i&&this.dispatch(function(t){t.setCaretPosition(n)})),e):t}},{key:"handleMaxLength",value:function(t,e){var n=this.getOptions(),i=n.maxLength,s=t[n.inputName||"default"],a=e.length-1>=i;if(e.length<=s.length)return!1;if(Number.isInteger(i))return n.debug&&console.log("maxLength (num) reached:",a),a?(this.maxLengthReached=!0,!0):(this.maxLengthReached=!1,!1);if("object"===o(i)){var r=e.length-1>=i[n.inputName||"default"];return n.debug&&console.log("maxLength (obj) reached:",r),r?(this.maxLengthReached=!0,!0):(this.maxLengthReached=!1,!1)}}},{key:"isMaxLengthReached",value:function(){return Boolean(this.maxLengthReached)}},{key:"isTouchDevice",value:function(){return"ontouchstart"in window||navigator.maxTouchPoints}},{key:"pointerEventsSupported",value:function(){return!!window.PointerEvent}},{key:"camelCase",value:function(t){return t?t.toLowerCase().trim().split(/[.\-_\s]/g).reduce(function(t,e){return e.length?t+e[0].toUpperCase()+e.slice(1):t}):""}},{key:"chunkArray",value:function(e,n){return t(Array(Math.ceil(e.length/n))).map(function(t,o){return e.slice(n*o,n+n*o)})}},{key:"escapeRegex",value:function(t){return t.replace(/[-\/\\^$*+?.()|[\]{}]/g,"\\$&")}},{key:"getRtlOffset",value:function(t,e){var n=t,o=e.indexOf("‫");return o<t&&-1!=o&&n--,e.indexOf("‬")<t&&-1!=o&&n--,n<0?0:n}},{key:"isConstructor",value:function(t){try{Reflect.construct(String,[],t)}catch(t){return!1}return!0}}],r=[{key:"bindMethods",value:function(t,n){var o,i=function(t,n){var o="undefined"!=typeof Symbol&&t[Symbol.iterator]||t["@@iterator"];if(!o){if(Array.isArray(t)||(o=e(t))||n&&t&&"number"==typeof t.length){o&&(t=o);var i=0,s=function(){};return{s,n:function(){return i>=t.length?{done:!0}:{done:!1,value:t[i++]}},e:function(t){throw t},f:s}}throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.")}var a,r=!0,u=!1;return{s:function(){o=o.call(t)},n:function(){var t=o.next();return r=t.done,t},e:function(t){u=!0,a=t},f:function(){try{r||null==o.return||o.return()}finally{if(u)throw a}}}}(Object.getOwnPropertyNames(t.prototype));try{for(i.s();!(o=i.n()).done;){var s=o.value;"constructor"===s||"bindMethods"===s||(n[s]=n[s].bind(n))}}catch(t){i.e(t)}finally{i.f()}}}],a&&i(n.prototype,a),r&&i(n,r),Object.defineProperty(n,"prototype",{writable:!1}),n;var n,a,r}();s(r,"noop",function(){});const u=r;function l(t){return l="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},l(t)}function c(t,e){for(var n=0;n<e.length;n++){var o=e[n];o.enumerable=o.enumerable||!1,o.configurable=!0,"value"in o&&(o.writable=!0),Object.defineProperty(t,h(o.key),o)}}function d(t,e,n){return(e=h(e))in t?Object.defineProperty(t,e,{value:n,enumerable:!0,configurable:!0,writable:!0}):t[e]=n,t}function h(t){var e=function(t,e){if("object"!=l(t)||!t)return t;var n=t[Symbol.toPrimitive];if(void 0!==n){var o=n.call(t,e||"default");if("object"!=l(o))return o;throw new TypeError("@@toPrimitive must return a primitive value.")}return("string"===e?String:Number)(t)}(t,"string");return"symbol"==l(e)?e:e+""}const p=function(){return t=function t(e){var n=this,o=e.dispatch,i=e.getOptions;!function(t,e){if(!(t instanceof e))throw new TypeError("Cannot call a class as a function")}(this,t),d(this,"getOptions",void 0),d(this,"dispatch",void 0),d(this,"isModifierKey",function(t){return t.altKey||t.ctrlKey||t.shiftKey||["Tab","CapsLock","Esc","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(t.code||t.key||n.keyCodeToKey(null==t?void 0:t.keyCode))}),this.dispatch=o,this.getOptions=i,u.bindMethods(t,this)},e=[{key:"handleHighlightKeyDown",value:function(t){var e=this.getOptions();e.physicalKeyboardHighlightPreventDefault&&this.isModifierKey(t)&&(t.preventDefault(),t.stopImmediatePropagation());var n=this.getSimpleKeyboardLayoutKey(t);this.dispatch(function(o){var i,s,a=o.getButtonElement(n),r=o.getButtonElement("{".concat(n,"}"));if(a)i=a,s=n;else{if(!r)return;i=r,s="{".concat(n,"}")}var u,l,c,d,h=function(t){t.style.background=e.physicalKeyboardHighlightBgColor||"#dadce4",t.style.color=e.physicalKeyboardHighlightTextColor||"black"};if(i)if(Array.isArray(i)){if(i.forEach(function(t){return h(t)}),e.physicalKeyboardHighlightPress)if(e.physicalKeyboardHighlightPressUsePointerEvents)null===(u=i[0])||void 0===u||null===(l=u.onpointerdown)||void 0===l||l.call(u,t);else if(e.physicalKeyboardHighlightPressUseClick){var p;null===(p=i[0])||void 0===p||p.click()}else o.handleButtonClicked(s,t)}else h(i),e.physicalKeyboardHighlightPress&&(e.physicalKeyboardHighlightPressUsePointerEvents?null===(c=i)||void 0===c||null===(d=c.onpointerdown)||void 0===d||d.call(c,t):e.physicalKeyboardHighlightPressUseClick?i.click():o.handleButtonClicked(s,t))})}},{key:"handleHighlightKeyUp",value:function(t){var e=this.getOptions();e.physicalKeyboardHighlightPreventDefault&&this.isModifierKey(t)&&(t.preventDefault(),t.stopImmediatePropagation());var n=this.getSimpleKeyboardLayoutKey(t);this.dispatch(function(o){var i,s,a,r=o.getButtonElement(n)||o.getButtonElement("{".concat(n,"}")),u=function(t){t.removeAttribute&&t.removeAttribute("style")};r&&(Array.isArray(r)?(r.forEach(function(t){return u(t)}),e.physicalKeyboardHighlightPressUsePointerEvents&&(null===(i=r[0])||void 0===i||null===(s=i.onpointerup)||void 0===s||s.call(i,t))):(u(r),e.physicalKeyboardHighlightPressUsePointerEvents&&(null==r||null===(a=r.onpointerup)||void 0===a||a.call(r,t))))})}},{key:"getSimpleKeyboardLayoutKey",value:function(t){var e,n="",o=t.code||t.key||this.keyCodeToKey(null==t?void 0:t.keyCode);return(n=null!=o&&o.includes("Numpad")||null!=o&&o.includes("Shift")||null!=o&&o.includes("Space")||null!=o&&o.includes("Backspace")||null!=o&&o.includes("Control")||null!=o&&o.includes("Alt")||null!=o&&o.includes("Meta")?t.code||"":t.key||this.keyCodeToKey(null==t?void 0:t.keyCode)||"").length>1?null===(e=n)||void 0===e?void 0:e.toLowerCase():n}},{key:"keyCodeToKey",value:function(t){return{8:"Backspace",9:"Tab",13:"Enter",16:"Shift",17:"Ctrl",18:"Alt",19:"Pause",20:"CapsLock",27:"Esc",32:"Space",33:"PageUp",34:"PageDown",35:"End",36:"Home",37:"ArrowLeft",38:"ArrowUp",39:"ArrowRight",40:"ArrowDown",45:"Insert",46:"Delete",48:"0",49:"1",50:"2",51:"3",52:"4",53:"5",54:"6",55:"7",56:"8",57:"9",65:"A",66:"B",67:"C",68:"D",69:"E",70:"F",71:"G",72:"H",73:"I",74:"J",75:"K",76:"L",77:"M",78:"N",79:"O",80:"P",81:"Q",82:"R",83:"S",84:"T",85:"U",86:"V",87:"W",88:"X",89:"Y",90:"Z",91:"Meta",96:"Numpad0",97:"Numpad1",98:"Numpad2",99:"Numpad3",100:"Numpad4",101:"Numpad5",102:"Numpad6",103:"Numpad7",104:"Numpad8",105:"Numpad9",106:"NumpadMultiply",107:"NumpadAdd",109:"NumpadSubtract",110:"NumpadDecimal",111:"NumpadDivide",112:"F1",113:"F2",114:"F3",115:"F4",116:"F5",117:"F6",118:"F7",119:"F8",120:"F9",121:"F10",122:"F11",123:"F12",144:"NumLock",145:"ScrollLock",186:";",187:"=",188:",",189:"-",190:".",191:"/",192:"`",219:"[",220:"\\",221:"]",222:"'"}[t]||""}}],e&&c(t.prototype,e),n&&c(t,n),Object.defineProperty(t,"prototype",{writable:!1}),t;var t,e,n}();function f(t){return f="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},f(t)}function y(t,e){for(var n=0;n<e.length;n++){var o=e[n];o.enumerable=o.enumerable||!1,o.configurable=!0,"value"in o&&(o.writable=!0),Object.defineProperty(t,g(o.key),o)}}function v(t,e,n){return(e=g(e))in t?Object.defineProperty(t,e,{value:n,enumerable:!0,configurable:!0,writable:!0}):t[e]=n,t}function g(t){var e=function(t,e){if("object"!=f(t)||!t)return t;var n=t[Symbol.toPrimitive];if(void 0!==n){var o=n.call(t,e||"default");if("object"!=f(o))return o;throw new TypeError("@@toPrimitive must return a primitive value.")}return("string"===e?String:Number)(t)}(t,"string");return"symbol"==f(e)?e:e+""}const m=function(){return t=function t(e){var n=e.utilities,o=e.options;!function(t,e){if(!(t instanceof e))throw new TypeError("Cannot call a class as a function")}(this,t),v(this,"utilities",void 0),v(this,"options",void 0),v(this,"candidateBoxElement",void 0),v(this,"pageIndex",0),v(this,"pageSize",void 0),this.utilities=n,this.options=o,u.bindMethods(t,this),this.pageSize=this.utilities.getOptions().layoutCandidatesPageSize||5},e=[{key:"destroy",value:function(){this.candidateBoxElement&&(this.candidateBoxElement.remove(),this.pageIndex=0)}},{key:"show",value:function(t){var e=this,n=t.candidateValue,o=t.targetElement,i=t.onSelect;if(n&&n.length){var s=this.utilities.chunkArray(n.split(" "),this.pageSize);this.renderPage({candidateListPages:s,targetElement:o,pageIndex:this.pageIndex,nbPages:s.length,onItemSelected:function(t,n){i(t,n),e.destroy()}})}}},{key:"renderPage",value:function(t){var e,n=this,o=t.candidateListPages,i=t.targetElement,s=t.pageIndex,a=t.nbPages,r=t.onItemSelected;null===(e=this.candidateBoxElement)||void 0===e||e.remove(),this.candidateBoxElement=document.createElement("div"),this.candidateBoxElement.className="hg-candidate-box";var u=document.createElement("ul");u.className="hg-candidate-box-list",o[s].forEach(function(t){var e,o=document.createElement("li"),i=function(){var t=new(n.options.useTouchEvents?TouchEvent:MouseEvent)("click");return Object.defineProperty(t,"target",{value:o}),t};o.className="hg-candidate-box-list-item",o.textContent=(null===(e=n.options.display)||void 0===e?void 0:e[t])||t,n.options.useTouchEvents?o.ontouchstart=function(e){return r(t,e||i())}:o.onclick=function(){var e=arguments.length>0&&void 0!==arguments[0]?arguments[0]:i();return r(t,e)},u.appendChild(o)});var l=s>0,c=document.createElement("div");c.classList.add("hg-candidate-box-prev"),l&&c.classList.add("hg-candidate-box-btn-active");var d=function(){l&&n.renderPage({candidateListPages:o,targetElement:i,pageIndex:s-1,nbPages:a,onItemSelected:r})};this.options.useTouchEvents?c.ontouchstart=d:c.onclick=d,this.candidateBoxElement.appendChild(c),this.candidateBoxElement.appendChild(u);var h=s<a-1,p=document.createElement("div");p.classList.add("hg-candidate-box-next"),h&&p.classList.add("hg-candidate-box-btn-active");var f=function(){h&&n.renderPage({candidateListPages:o,targetElement:i,pageIndex:s+1,nbPages:a,onItemSelected:r})};this.options.useTouchEvents?p.ontouchstart=f:p.onclick=f,this.candidateBoxElement.appendChild(p),i.prepend(this.candidateBoxElement)}}],e&&y(t.prototype,e),n&&y(t,n),Object.defineProperty(t,"prototype",{writable:!1}),t;var t,e,n}();function b(t){return function(t){if(Array.isArray(t))return k(t)}(t)||function(t){if("undefined"!=typeof Symbol&&null!=t[Symbol.iterator]||null!=t["@@iterator"])return Array.from(t)}(t)||function(t,e){if(t){if("string"==typeof t)return k(t,e);var n={}.toString.call(t).slice(8,-1);return"Object"===n&&t.constructor&&(n=t.constructor.name),"Map"===n||"Set"===n?Array.from(t):"Arguments"===n||/^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(n)?k(t,e):void 0}}(t)||function(){throw new TypeError("Invalid attempt to spread non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.")}()}function k(t,e){(null==e||e>t.length)&&(e=t.length);for(var n=0,o=Array(e);n<e;n++)o[n]=t[n];return o}function w(t){return w="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},w(t)}function E(t,e){var n=Object.keys(t);if(Object.getOwnPropertySymbols){var o=Object.getOwnPropertySymbols(t);e&&(o=o.filter(function(e){return Object.getOwnPropertyDescriptor(t,e).enumerable})),n.push.apply(n,o)}return n}function C(t,e){for(var n=0;n<e.length;n++){var o=e[n];o.enumerable=o.enumerable||!1,o.configurable=!0,"value"in o&&(o.writable=!0),Object.defineProperty(t,I(o.key),o)}}function P(t,e,n){return(e=I(e))in t?Object.defineProperty(t,e,{value:n,enumerable:!0,configurable:!0,writable:!0}):t[e]=n,t}function I(t){var e=function(t,e){if("object"!=w(t)||!t)return t;var n=t[Symbol.toPrimitive];if(void 0!==n){var o=n.call(t,e||"default");if("object"!=w(o))return o;throw new TypeError("@@toPrimitive must return a primitive value.")}return("string"===e?String:Number)(t)}(t,"string");return"symbol"==w(e)?e:e+""}const O=function(){return t=function t(e,n){var o=this;if(function(t,e){if(!(t instanceof e))throw new TypeError("Cannot call a class as a function")}(this,t),P(this,"input",void 0),P(this,"options",void 0),P(this,"utilities",void 0),P(this,"caretPosition",void 0),P(this,"caretPositionEnd",void 0),P(this,"keyboardDOM",void 0),P(this,"keyboardPluginClasses",void 0),P(this,"keyboardDOMClass",void 0),P(this,"buttonElements",void 0),P(this,"currentInstanceName",void 0),P(this,"allKeyboardInstances",void 0),P(this,"keyboardInstanceNames",void 0),P(this,"isFirstKeyboardInstance",void 0),P(this,"physicalKeyboard",void 0),P(this,"modules",void 0),P(this,"activeButtonClass",void 0),P(this,"holdInteractionTimeout",void 0),P(this,"holdTimeout",void 0),P(this,"isMouseHold",void 0),P(this,"initialized",void 0),P(this,"candidateBox",void 0),P(this,"keyboardRowsDOM",void 0),P(this,"defaultName","default"),P(this,"activeInputElement",null),P(this,"handleParams",function(t,e){var n,o,i;if("string"==typeof t)n=t.split(".").join(""),o=document.querySelector(".".concat(n)),i=e;else if(t instanceof HTMLDivElement){if(!t.className)throw console.warn("Any DOM element passed as parameter must have a class."),new Error("KEYBOARD_DOM_CLASS_ERROR");n=t.className.split(" ")[0],o=t,i=e}else n="simple-keyboard",o=document.querySelector(".".concat(n)),i=t;return{keyboardDOMClass:n,keyboardDOM:o,options:i}}),P(this,"getOptions",function(){return o.options}),P(this,"getCaretPosition",function(){return o.caretPosition}),P(this,"getCaretPositionEnd",function(){return o.caretPositionEnd}),P(this,"registerModule",function(t,e){o.modules[t]||(o.modules[t]={}),e(o.modules[t])}),P(this,"getKeyboardClassString",function(){for(var t=arguments.length,e=new Array(t),n=0;n<t;n++)e[n]=arguments[n];return[o.keyboardDOMClass].concat(e).filter(function(t){return!!t}).join(" ")}),"undefined"!=typeof window){var i=this.handleParams(e,n),s=i.keyboardDOMClass,a=i.keyboardDOM,r=i.options,l=void 0===r?{}:r;this.utilities=new u({getOptions:this.getOptions,getCaretPosition:this.getCaretPosition,getCaretPositionEnd:this.getCaretPositionEnd,dispatch:this.dispatch}),this.caretPosition=null,this.caretPositionEnd=null,this.keyboardDOM=a,this.options=function(t){for(var e=1;e<arguments.length;e++){var n=null!=arguments[e]?arguments[e]:{};e%2?E(Object(n),!0).forEach(function(e){P(t,e,n[e])}):Object.getOwnPropertyDescriptors?Object.defineProperties(t,Object.getOwnPropertyDescriptors(n)):E(Object(n)).forEach(function(e){Object.defineProperty(t,e,Object.getOwnPropertyDescriptor(n,e))})}return t}({layoutName:"default",theme:"hg-theme-default",inputName:"default",preventMouseDownDefault:!1,enableLayoutCandidates:!0,excludeFromLayout:{}},l),this.keyboardPluginClasses="",u.bindMethods(t,this);var c=this.options.inputName,d=void 0===c?this.defaultName:c;if(this.input={},this.input[d]="",this.keyboardDOMClass=s,this.buttonElements={},window.SimpleKeyboardInstances||(window.SimpleKeyboardInstances={}),this.currentInstanceName=this.utilities.camelCase(this.keyboardDOMClass),window.SimpleKeyboardInstances[this.currentInstanceName]=this,this.allKeyboardInstances=window.SimpleKeyboardInstances,this.keyboardInstanceNames=Object.keys(window.SimpleKeyboardInstances),this.isFirstKeyboardInstance=this.keyboardInstanceNames[0]===this.currentInstanceName,this.physicalKeyboard=new p({dispatch:this.dispatch,getOptions:this.getOptions}),this.candidateBox=this.options.enableLayoutCandidates?new m({utilities:this.utilities,options:this.options}):null,!this.keyboardDOM)throw console.warn('".'.concat(s,'" was not found in the DOM.')),new Error("KEYBOARD_DOM_ERROR");this.render(),this.modules={},this.loadModules()}},e=[{key:"setCaretPosition",value:function(t){var e=arguments.length>1&&void 0!==arguments[1]?arguments[1]:t;this.caretPosition=t,this.caretPositionEnd=e}},{key:"getInputCandidates",value:function(t){var e=this,n=this.options,o=n.layoutCandidates,i=n.layoutCandidatesCaseSensitiveMatch;if(!o||"object"!==w(o))return{};var s=Object.keys(o).filter(function(n){var o=t.substring(0,e.getCaretPositionEnd()||0)||t,s=new RegExp("".concat(e.utilities.escapeRegex(n),"$"),i?"g":"gi");return!!b(o.matchAll(s)).length});if(s.length>1){var a=s.sort(function(t,e){return e.length-t.length})[0];return{candidateKey:a,candidateValue:o[a]}}if(s.length){var r=s[0];return{candidateKey:r,candidateValue:o[r]}}return{}}},{key:"showCandidatesBox",value:function(t,e,n){var o=this;this.candidateBox&&this.candidateBox.show({candidateValue:e,targetElement:n,onSelect:function(e,n){var i=o.options,s=i.layoutCandidatesCaseSensitiveMatch,a=i.disableCandidateNormalization,r=i.enableLayoutCandidatesKeyPress,u=e;a||(u=e.normalize("NFD")),"function"==typeof o.options.beforeInputUpdate&&o.options.beforeInputUpdate(o);var l=o.getInput(o.options.inputName,!0),c=o.getCaretPositionEnd()||0,d=l.substring(0,c||0)||l,h=new RegExp("".concat(o.utilities.escapeRegex(t),"$"),s?"g":"gi"),p=d.replace(h,u),f=l.replace(d,p),y=p.length-d.length,v=(c||l.length)+y;v<0&&(v=0),o.setInput(f,o.options.inputName,!0),o.setCaretPosition(v),r&&"function"==typeof o.options.onKeyPress&&o.options.onKeyPress(e,n),"function"==typeof o.options.onChange&&o.options.onChange(o.getInput(o.options.inputName,!0),n),"function"==typeof o.options.onChangeAll&&o.options.onChangeAll(o.getAllInputs(),n)}})}},{key:"handleButtonClicked",value:function(t,e){var n=this.options,o=n.inputName,i=void 0===o?this.defaultName:o,s=n.debug;if("{//}"!==t){this.input[i]||(this.input[i]=""),"function"==typeof this.options.beforeInputUpdate&&this.options.beforeInputUpdate(this);var a=this.utilities.getUpdatedInput(t,this.input[i],this.caretPosition,this.caretPositionEnd);if(this.utilities.isStandardButton(t)&&this.activeInputElement&&this.input[i]&&this.input[i]===a&&0===this.caretPosition&&this.caretPositionEnd===a.length)return this.setInput("",this.options.inputName,!0),this.setCaretPosition(0),this.activeInputElement.value="",this.activeInputElement.setSelectionRange(0,0),void this.handleButtonClicked(t,e);if("function"==typeof this.options.onKeyPress&&this.options.onKeyPress(t,e),this.input[i]!==a&&(!this.options.inputPattern||this.options.inputPattern&&this.inputPatternIsValid(a))){if(this.options.maxLength&&this.utilities.handleMaxLength(this.input,a))return;var r=this.utilities.getUpdatedInput(t,this.input[i],this.caretPosition,this.caretPositionEnd,!0);if(this.setInput(r,this.options.inputName,!0),s&&console.log("Input changed:",this.getAllInputs()),this.options.debug&&console.log("Caret at: ",this.getCaretPosition(),this.getCaretPositionEnd(),"(".concat(this.keyboardDOMClass,")"),null==e?void 0:e.type),this.options.syncInstanceInputs&&this.syncInstanceInputs(),"function"==typeof this.options.onChange&&this.options.onChange(this.getInput(this.options.inputName,!0),e),"function"==typeof this.options.onChangeAll&&this.options.onChangeAll(this.getAllInputs(),e),null!=e&&e.target&&this.options.enableLayoutCandidates){var u,l=this.getInputCandidates(a),c=l.candidateKey,d=l.candidateValue;c&&d?this.showCandidatesBox(c,d,this.keyboardDOM):null===(u=this.candidateBox)||void 0===u||u.destroy()}}this.caretPositionEnd&&this.caretPosition!==this.caretPositionEnd&&(this.setCaretPosition(this.caretPositionEnd,this.caretPositionEnd),this.activeInputElement&&this.activeInputElement.setSelectionRange(this.caretPositionEnd,this.caretPositionEnd),this.options.debug&&console.log("Caret position aligned",this.caretPosition)),s&&console.log("Key pressed:",t)}}},{key:"getMouseHold",value:function(){return this.isMouseHold}},{key:"setMouseHold",value:function(t){this.options.syncInstanceInputs?this.dispatch(function(e){e.isMouseHold=t}):this.isMouseHold=t}},{key:"handleButtonMouseDown",value:function(t,e){var n=this;e&&(this.options.preventMouseDownDefault&&e.preventDefault(),this.options.stopMouseDownPropagation&&e.stopPropagation(),e.target.classList.add(this.activeButtonClass)),this.holdInteractionTimeout&&clearTimeout(this.holdInteractionTimeout),this.holdTimeout&&clearTimeout(this.holdTimeout),this.setMouseHold(!0),this.options.disableButtonHold||(this.holdTimeout=window.setTimeout(function(){(n.getMouseHold()&&(!t.includes("{")&&!t.includes("}")||"{delete}"===t||"{backspace}"===t||"{bksp}"===t||"{space}"===t||"{tab}"===t)||"{arrowright}"===t||"{arrowleft}"===t||"{arrowup}"===t||"{arrowdown}"===t)&&(n.options.debug&&console.log("Button held:",t),n.handleButtonHold(t)),clearTimeout(n.holdTimeout)},500))}},{key:"handleButtonMouseUp",value:function(t,e){var n=this;e&&(this.options.preventMouseUpDefault&&e.preventDefault&&e.preventDefault(),this.options.stopMouseUpPropagation&&e.stopPropagation&&e.stopPropagation(),!(e.target===this.keyboardDOM||e.target&&this.keyboardDOM.contains(e.target)||this.candidateBox&&this.candidateBox.candidateBoxElement&&(e.target===this.candidateBox.candidateBoxElement||e.target&&this.candidateBox.candidateBoxElement.contains(e.target)))&&this.candidateBox&&this.candidateBox.destroy()),this.recurseButtons(function(t){t.classList.remove(n.activeButtonClass)}),this.setMouseHold(!1),this.holdInteractionTimeout&&clearTimeout(this.holdInteractionTimeout),t&&"function"==typeof this.options.onKeyReleased&&this.options.onKeyReleased(t,e)}},{key:"handleKeyboardContainerMouseDown",value:function(t){this.options.preventMouseDownDefault&&t.preventDefault()}},{key:"handleButtonHold",value:function(t){var e=this;this.holdInteractionTimeout&&clearTimeout(this.holdInteractionTimeout),this.holdInteractionTimeout=window.setTimeout(function(){e.getMouseHold()?(e.handleButtonClicked(t),e.handleButtonHold(t)):clearTimeout(e.holdInteractionTimeout)},100)}},{key:"syncInstanceInputs",value:function(){var t=this;this.dispatch(function(e){e.replaceInput(t.input),e.setCaretPosition(t.caretPosition,t.caretPositionEnd)})}},{key:"clearInput",value:function(){var t=arguments.length>0&&void 0!==arguments[0]?arguments[0]:this.options.inputName||this.defaultName;this.input[t]="",this.setCaretPosition(0),this.options.syncInstanceInputs&&this.syncInstanceInputs()}},{key:"getInput",value:function(){var t=arguments.length>0&&void 0!==arguments[0]?arguments[0]:this.options.inputName||this.defaultName,e=arguments.length>1&&void 0!==arguments[1]&&arguments[1];return this.options.syncInstanceInputs&&!e&&this.syncInstanceInputs(),this.options.rtl?"‫"+this.input[t].replace("‫","").replace("‬","")+"‬":this.input[t]}},{key:"getAllInputs",value:function(){var t=this,e={};return Object.keys(this.input).forEach(function(n){e[n]=t.getInput(n,!0)}),e}},{key:"setInput",value:function(t){var e=arguments.length>1&&void 0!==arguments[1]?arguments[1]:this.options.inputName||this.defaultName,n=arguments.length>2?arguments[2]:void 0;this.input[e]=t,!n&&this.options.syncInstanceInputs&&this.syncInstanceInputs()}},{key:"replaceInput",value:function(t){this.input=t}},{key:"setOptions",value:function(){var t=arguments.length>0&&void 0!==arguments[0]?arguments[0]:{},e=this.changedOptions(t);this.options=Object.assign(this.options,t),e.length&&(this.options.debug&&console.log("changedOptions",e),this.onSetOptions(e),this.render())}},{key:"changedOptions",value:function(t){var e=this;return Object.keys(t).filter(function(n){return JSON.stringify(t[n])!==JSON.stringify(e.options[n])})}},{key:"onSetOptions",value:function(){var t=arguments.length>0&&void 0!==arguments[0]?arguments[0]:[];t.includes("layoutName")&&this.candidateBox&&this.candidateBox.destroy(),(t.includes("layoutCandidatesPageSize")||t.includes("layoutCandidates"))&&this.candidateBox&&(this.candidateBox.destroy(),this.candidateBox=new m({utilities:this.utilities,options:this.options}))}},{key:"resetRows",value:function(){this.keyboardRowsDOM&&this.keyboardRowsDOM.remove(),this.keyboardDOM.className=this.keyboardDOMClass,this.keyboardDOM.setAttribute("data-skInstance",this.currentInstanceName),this.buttonElements={}}},{key:"dispatch",value:function(t){if(!window.SimpleKeyboardInstances)throw console.warn("SimpleKeyboardInstances is not defined. Dispatch cannot be called."),new Error("INSTANCES_VAR_ERROR");return Object.keys(window.SimpleKeyboardInstances).forEach(function(e){t(window.SimpleKeyboardInstances[e],e)})}},{key:"addButtonTheme",value:function(t,e){var n=this;e&&t&&(t.split(" ").forEach(function(o){e.split(" ").forEach(function(e){n.options.buttonTheme||(n.options.buttonTheme=[]);var i=!1;n.options.buttonTheme.map(function(t){if(null!=t&&t.class.split(" ").includes(e)){i=!0;var n=t.buttons.split(" ");n.includes(o)||(i=!0,n.push(o),t.buttons=n.join(" "))}return t}),i||n.options.buttonTheme.push({class:e,buttons:t})})}),this.render())}},{key:"removeButtonTheme",value:function(t,e){var n=this;if(!t&&!e)return this.options.buttonTheme=[],void this.render();t&&Array.isArray(this.options.buttonTheme)&&this.options.buttonTheme.length&&(t.split(" ").forEach(function(t){var o;null===(o=n.options)||void 0===o||null===(o=o.buttonTheme)||void 0===o||o.map(function(o,i){if(o&&e&&e.includes(o.class)||!e){var s,a,r=null===(s=o)||void 0===s?void 0:s.buttons.split(" ").filter(function(e){return e!==t});o&&null!=r&&r.length?o.buttons=r.join(" "):(null===(a=n.options.buttonTheme)||void 0===a||a.splice(i,1),o=null)}return o})}),this.render())}},{key:"getButtonElement",value:function(t){var e,n=this.buttonElements[t];return n&&(e=n.length>1?n:n[0]),e}},{key:"inputPatternIsValid",value:function(t){var e,n=this.options.inputPattern;if((e=n instanceof RegExp?n:n[this.options.inputName||this.defaultName])&&t){var o=e.test(t);return this.options.debug&&console.log('inputPattern ("'.concat(e,'"): ').concat(o?"passed":"did not pass!")),o}return!0}},{key:"setEventListeners",value:function(){if(this.isFirstKeyboardInstance||!this.allKeyboardInstances){this.options.debug&&console.log("Caret handling started (".concat(this.keyboardDOMClass,")"));var t=this.options.physicalKeyboardHighlightPreventDefault,e=void 0!==t&&t;document.addEventListener("keyup",this.handleKeyUp,e),document.addEventListener("keydown",this.handleKeyDown,e),document.addEventListener("mouseup",this.handleMouseUp),document.addEventListener("touchend",this.handleTouchEnd),this.options.updateCaretOnSelectionChange&&document.addEventListener("selectionchange",this.handleSelectionChange),document.addEventListener("select",this.handleSelect)}}},{key:"handleKeyUp",value:function(t){this.caretEventHandler(t),this.options.physicalKeyboardHighlight&&this.physicalKeyboard.handleHighlightKeyUp(t)}},{key:"handleKeyDown",value:function(t){this.options.physicalKeyboardHighlight&&this.physicalKeyboard.handleHighlightKeyDown(t)}},{key:"handleMouseUp",value:function(t){this.caretEventHandler(t)}},{key:"handleTouchEnd",value:function(t){this.caretEventHandler(t)}},{key:"handleSelect",value:function(t){this.caretEventHandler(t)}},{key:"handleSelectionChange",value:function(t){navigator.userAgent.includes("Firefox")||this.caretEventHandler(t)}},{key:"caretEventHandler",value:function(t){var e,n=this;t.target.tagName&&(e=t.target.tagName.toLowerCase()),this.dispatch(function(o){var i=t.target===o.keyboardDOM||t.target&&o.keyboardDOM.contains(t.target);if(n.options.syncInstanceInputs){var s="function"==typeof t.composedPath?t.composedPath():t.path;Array.isArray(s)&&(i=s.some(function(t){var e;return null==t||null===(e=t.hasAttribute)||void 0===e?void 0:e.call(t,"data-skInstance")}))}if(("textarea"===e||"input"===e&&["text","search","url","tel","password"].includes(t.target.type))&&!o.options.disableCaretPositioning){var a=t.target.selectionStart,r=t.target.selectionEnd;o.options.rtl&&(a=o.utilities.getRtlOffset(a,o.getInput()),r=o.utilities.getRtlOffset(r,o.getInput())),o.setCaretPosition(a,r),o.activeInputElement=t.target,o.options.debug&&console.log("Caret at: ",o.getCaretPosition(),o.getCaretPositionEnd(),t&&t.target.tagName.toLowerCase(),"(".concat(o.keyboardDOMClass,")"),null==t?void 0:t.type)}else!o.options.disableCaretPositioning&&i||"selectionchange"===(null==t?void 0:t.type)||(o.setCaretPosition(null),o.activeInputElement=null,o.options.debug&&console.log('Caret position reset due to "'.concat(null==t?void 0:t.type,'" event'),t))})}},{key:"recurseButtons",value:function(t){var e=this;t&&Object.keys(this.buttonElements).forEach(function(n){return e.buttonElements[n].forEach(t)})}},{key:"destroy",value:function(){this.options.debug&&console.log("Destroying simple-keyboard instance: ".concat(this.currentInstanceName));var t=this.options.physicalKeyboardHighlightPreventDefault,e=void 0!==t&&t;document.removeEventListener("keyup",this.handleKeyUp,e),document.removeEventListener("keydown",this.handleKeyDown,e),document.removeEventListener("mouseup",this.handleMouseUp),document.removeEventListener("touchend",this.handleTouchEnd),document.removeEventListener("select",this.handleSelect),this.options.updateCaretOnSelectionChange&&document.removeEventListener("selectionchange",this.handleSelectionChange),document.onpointerup=null,document.ontouchend=null,document.ontouchcancel=null,document.onmouseup=null,this.recurseButtons(function(t){t&&(t.onpointerdown=null,t.onpointerup=null,t.onpointercancel=null,t.ontouchstart=null,t.ontouchend=null,t.ontouchcancel=null,t.onclick=null,t.onmousedown=null,t.onmouseup=null,t.remove(),t=null)}),this.keyboardDOM.onpointerdown=null,this.keyboardDOM.ontouchstart=null,this.keyboardDOM.onmousedown=null,this.resetRows(),this.candidateBox&&(this.candidateBox.destroy(),this.candidateBox=null),this.activeInputElement=null,this.keyboardDOM.removeAttribute("data-skInstance"),this.keyboardDOM.textContent="",window.SimpleKeyboardInstances[this.currentInstanceName]=null,delete window.SimpleKeyboardInstances[this.currentInstanceName],this.initialized=!1}},{key:"getButtonThemeClasses",value:function(t){var e=this.options.buttonTheme,n=[];return Array.isArray(e)&&e.forEach(function(e){if(e&&e.class&&"string"==typeof e.class&&e.buttons&&"string"==typeof e.buttons){var o=e.class.split(" ");e.buttons.split(" ").includes(t)&&(n=[].concat(b(n),b(o)))}else console.warn('Incorrect "buttonTheme". Please check the documentation.',e)}),n}},{key:"setDOMButtonAttributes",value:function(t,e){var n=this.options.buttonAttributes;Array.isArray(n)&&n.forEach(function(n){n.attribute&&"string"==typeof n.attribute&&n.value&&"string"==typeof n.value?n.buttons&&"string"==typeof n.buttons?n.buttons.split(" ").includes(t)&&e(n.attribute,n.value):e(n.attribute,n.value):console.warn('Incorrect "buttonAttributes". Please check the documentation.',n)})}},{key:"onTouchDeviceDetected",value:function(){this.processAutoTouchEvents(),this.disableContextualWindow()}},{key:"disableContextualWindow",value:function(){window.oncontextmenu=function(t){var e;if(null!==(e=t.target.classList)&&void 0!==e&&e.contains("hg-button"))return t.preventDefault(),t.stopPropagation(),!1}}},{key:"processAutoTouchEvents",value:function(){this.options.autoUseTouchEvents&&(this.options.useTouchEvents=!0,this.options.debug&&console.log("autoUseTouchEvents: Touch device detected, useTouchEvents enabled."))}},{key:"onInit",value:function(){this.options.debug&&console.log("".concat(this.keyboardDOMClass," Initialized")),this.setEventListeners(),"function"==typeof this.options.onInit&&this.options.onInit(this)}},{key:"beforeFirstRender",value:function(){this.utilities.isTouchDevice()&&this.onTouchDeviceDetected(),"function"==typeof this.options.beforeFirstRender&&this.options.beforeFirstRender(this),this.isFirstKeyboardInstance&&this.utilities.pointerEventsSupported()&&!this.options.useTouchEvents&&!this.options.useMouseEvents&&this.options.debug&&console.log("Using PointerEvents as it is supported by this browser"),this.options.useTouchEvents&&this.options.debug&&console.log("useTouchEvents has been enabled. Only touch events will be used.")}},{key:"beforeRender",value:function(){"function"==typeof this.options.beforeRender&&this.options.beforeRender(this)}},{key:"onRender",value:function(){"function"==typeof this.options.onRender&&this.options.onRender(this)}},{key:"onModulesLoaded",value:function(){"function"==typeof this.options.onModulesLoaded&&this.options.onModulesLoaded(this)}},{key:"loadModules",value:function(){var t=this;Array.isArray(this.options.modules)&&(this.options.modules.forEach(function(e){var n=t.utilities.isConstructor(e)?new e(t):e(t);n.init&&n.init(t)}),this.keyboardPluginClasses="modules-loaded",this.render(),this.onModulesLoaded())}},{key:"getModuleProp",value:function(t,e){return!!this.modules[t]&&this.modules[t][e]}},{key:"getModulesList",value:function(){return Object.keys(this.modules)}},{key:"parseRowDOMContainers",value:function(t,e,n,o){var i=this,s=Array.from(t.children),a=0;return s.length&&n.forEach(function(n,r){var u=o[r];if(!(u&&u>n))return!1;var l=n-a,c=u-a,d=document.createElement("div");d.className+="hg-button-container";var h="".concat(i.options.layoutName,"-r").concat(e,"c").concat(r);d.setAttribute("data-skUID",h);var p=s.splice(l,c-l+1);a+=c-l,p.forEach(function(t){return d.appendChild(t)}),s.splice(l,0,d),t.textContent="",s.forEach(function(e){return t.appendChild(e)}),i.options.debug&&console.log("rowDOMContainer",p,l,c,a+1)}),t}},{key:"render",value:function(){var t=this;this.resetRows(),this.initialized||this.beforeFirstRender(),this.beforeRender();var e="hg-layout-".concat(this.options.layoutName),n=this.options.layout||{default:["` 1 2 3 4 5 6 7 8 9 0 - = {bksp}","{tab} q w e r t y u i o p [ ] \\","{lock} a s d f g h j k l ; ' {enter}","{shift} z x c v b n m , . / {shift}",".com @ {space}"],shift:["~ ! @ # $ % ^ & * ( ) _ + {bksp}","{tab} Q W E R T Y U I O P { } |",'{lock} A S D F G H J K L : " {enter}',"{shift} Z X C V B N M < > ? {shift}",".com @ {space}"]},o=this.options.useTouchEvents||!1,i=o?"hg-touch-events":"",s=this.options.useMouseEvents||!1,a=this.options.disableRowButtonContainers;this.keyboardDOM.className=this.getKeyboardClassString(this.options.theme,e,this.keyboardPluginClasses,i),this.keyboardDOM.setAttribute("data-skInstance",this.currentInstanceName),this.keyboardRowsDOM=document.createElement("div"),this.keyboardRowsDOM.className="hg-rows",n[this.options.layoutName||this.defaultName].forEach(function(e,n){var i=e.split(" ");t.options.excludeFromLayout&&t.options.excludeFromLayout[t.options.layoutName||t.defaultName]&&(i=i.filter(function(e){return t.options.excludeFromLayout&&!t.options.excludeFromLayout[t.options.layoutName||t.defaultName].includes(e)}));var r=document.createElement("div");r.className+="hg-row";var u=[],l=[];i.forEach(function(e,i){var c,d=!a&&"string"==typeof e&&e.length>1&&0===e.indexOf("["),h=!a&&"string"==typeof e&&e.length>1&&e.indexOf("]")===e.length-1;d&&(u.push(i),e=e.replace(/\[/g,"")),h&&(l.push(i),e=e.replace(/\]/g,""));var p=t.utilities.getButtonClass(e),f=t.utilities.getButtonDisplayName(e,t.options.display,t.options.mergeDisplay),y=t.options.useButtonTag?"button":"div",v=document.createElement(y);v.className+="hg-button ".concat(p),(c=v.classList).add.apply(c,b(t.getButtonThemeClasses(e))),t.setDOMButtonAttributes(e,function(t,e){v.setAttribute(t,e)}),t.activeButtonClass="hg-activeButton",!t.utilities.pointerEventsSupported()||o||s?o?(v.ontouchstart=function(n){t.handleButtonClicked(e,n),t.handleButtonMouseDown(e,n)},v.ontouchend=function(n){t.handleButtonMouseUp(e,n)},v.ontouchcancel=function(n){t.handleButtonMouseUp(e,n)}):(v.onclick=function(n){t.setMouseHold(!1),"function"==typeof t.options.onKeyReleased||t.options.useMouseEvents&&t.options.clickOnMouseDown||t.handleButtonClicked(e,n)},v.onmousedown=function(n){("function"==typeof t.options.onKeyReleased||t.options.useMouseEvents&&t.options.clickOnMouseDown)&&!t.isMouseHold&&t.handleButtonClicked(e,n),t.handleButtonMouseDown(e,n)},v.onmouseup=function(n){t.handleButtonMouseUp(e,n)}):(v.onpointerdown=function(n){t.handleButtonClicked(e,n),t.handleButtonMouseDown(e,n)},v.onpointerup=function(n){t.handleButtonMouseUp(e,n)},v.onpointercancel=function(n){t.handleButtonMouseUp(e,n)}),v.setAttribute("data-skBtn",e);var g="".concat(t.options.layoutName,"-r").concat(n,"b").concat(i);v.setAttribute("data-skBtnUID",g);var m=document.createElement("span");m.textContent=f,v.appendChild(m),t.buttonElements[e]||(t.buttonElements[e]=[]),t.buttonElements[e].push(v),r.appendChild(v)}),r=t.parseRowDOMContainers(r,n,u,l),t.keyboardRowsDOM.appendChild(r)}),this.keyboardDOM.appendChild(this.keyboardRowsDOM),this.onRender(),this.initialized||(this.initialized=!0,!this.utilities.pointerEventsSupported()||o||s?o?(document.ontouchend=function(e){return t.handleButtonMouseUp(void 0,e)},document.ontouchcancel=function(e){return t.handleButtonMouseUp(void 0,e)},this.keyboardDOM.ontouchstart=function(e){return t.handleKeyboardContainerMouseDown(e)}):o||(document.onmouseup=function(e){return t.handleButtonMouseUp(void 0,e)},this.keyboardDOM.onmousedown=function(e){return t.handleKeyboardContainerMouseDown(e)}):(document.onpointerup=function(e){return t.handleButtonMouseUp(void 0,e)},this.keyboardDOM.onpointerdown=function(e){return t.handleKeyboardContainerMouseDown(e)}),this.onInit())}}],e&&C(t.prototype,e),n&&C(t,n),Object.defineProperty(t,"prototype",{writable:!1}),t;var t,e,n}(),M=O;export{O as SimpleKeyboard,M as default};
