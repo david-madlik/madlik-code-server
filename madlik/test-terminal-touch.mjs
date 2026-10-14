@@ -18,7 +18,7 @@ try {
  await page.locator('[data-section="terminal"]').click();
  const terminal=page.locator('.terminal-wrapper.active:visible .xterm-helper-textarea').first();
  await terminal.waitFor({state:'attached',timeout:20000});
- const keyboard=page.locator('[data-action="keyboard"]');await page.locator('[data-action="keyboard-provider"]').click();
+ const keyboard=page.locator('[data-action="keyboard"]');if(await page.locator('[data-action="keyboard-provider"]').getAttribute('aria-checked')==='false'){await page.locator('[data-action="keyboard-provider"]').click();}
  const screen=page.locator('.terminal-wrapper.active:visible .xterm-screen').first();
  for(const encoding of ['1006','1016']) {
   const prefix=path.join(cache,`mouse-${encoding}-${Date.now()}`);

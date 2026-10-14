@@ -5,7 +5,7 @@ they are not a portable installer or a Git commit ID.
 
 | Item | Current value |
 | --- | --- |
-| Release directory | `/opt/madlik-code-server/releases/41d769b81d10bf41b9194740364f0c5cd591dc48` |
+| Release directory | `/opt/madlik-code-server/releases/57a6dc4c649bd400035f883efae73c5f56d34149` |
 | Service / user | `code-server@david` / `david` |
 | Backend listener | `127.0.0.1:18101` |
 | systemd override | `/etc/systemd/system/code-server@david.service.d/20-madlik-fork.conf` |
@@ -25,29 +25,53 @@ are stored in this repository.
 ## Current behavior
 
 The release includes English mobile navigation, 75% font scaling, native xterm
-selection with Copy, a manual Paste dialog, compact theme-aware Code keyboard with
-hold/Ctrl/Alt/Fn, and the grouped keyboard control with the provider switch on the
-left and ⌨ on the right. Automatic clipboard reads, Shift+Insert and the earlier
-terminal snapshot/clipboard toolbar are not part of the current UI.
+selection with Copy / enlarged ×, persistent direct Paste with a manual-dialog
+fallback, and the compact theme-aware Code keyboard. The provider switch remains
+left of the keyboard icon. The keyboard toggle and four helper arrows use native
+VS Code Codicons with accessible English labels. Arrow buttons have zero padding,
+center their icons in both axes and use a 0.6px icon stroke. The alignment check
+passed at widths 375 and 390 px (center offsets below 0.01px), with screenshot
+inspection. The keyboard icon is unchanged. The Code keyboard is now the last child of
+the navigation panel, below section controls and terminal helpers. A preview
+geometry check and screenshots at widths 375 and 390 verify that the keyboard
+ends just above bottom safe-area padding and closes with the keyboard toggle. The floating clipboard probe was
+removed; the standalone authenticated clipboard page is retained. The owner
+reported working direct Paste after using that page, including after browser
+restart. The precise Safari cause and permission lifetime remain unconfirmed.
+The icon change passed the focused TypeScript check and the keyboard suite,
+including real Ctrl+Left PTY input, repeats, provider switch, themes and desktop
+cleanup.
 
-Validation is summarized in [TESTING.md](TESTING.md). The final keyboard-control
-order change was a source build plus service health check; earlier behavior checks
-covered the switch itself. The owner has since tried the mobile UI on the phone.
-The source is published through the root repository's quilt patch; a build identity
-hash names the deployed distribution independently of the root Git commit.
+Native is now the default keyboard provider. Bottom section buttons render
+Explorer / Source Control / Code / Terminal Codicons with English accessible
+labels and tooltips. The Code keyboard retains user-select:none and additionally
+prevents native selection in capture-phase input handlers; only ranges touching
+its key labels are cleared. The focused TypeScript check and keyboard suite passed,
+including Native startup/focus, Code input, repeats, modifiers, selection clearing,
+light/dark themes and desktop cleanup.
+
+Mobile editor and panel title bars now put actions in the upper row and tabs in
+the full-width lower row. The layout engine reserves both rows; Monaco, diff and
+terminal content are laid out below them. The preceding stacked-title build passed focused TypeScript checking.
+Its mobile suite verifies header geometry, file/Git/diff operations, terminal
+process persistence, 390 × 844 and 375 × 667 layouts, and simultaneous desktop
+plus desktop restoration at 1440 × 900. Earlier clipboard and keyboard suites
+cover Paste and keyboard behavior. The reviewed source changes are recorded in the root Git repository through
+the quilt patch. The build identity names the distribution independently of the root Git
+commit.
 
 ## Return to the preceding fork build
 
-Before the final order change, the systemd override was saved at:
+Before the mobile browser color-scheme change, the systemd override was saved at:
 
 ```text
-/opt/madlik-code-server/backups/before-keyboard-switch-order-20261014/20-madlik-fork.conf
+/opt/madlik-code-server/backups/before-browser-color-scheme-20261014/20-madlik-fork.conf
 ```
 
 Restore that override, reload systemd and restart the service:
 
 ```sh
-sudo cp /opt/madlik-code-server/backups/before-keyboard-switch-order-20261014/20-madlik-fork.conf /etc/systemd/system/code-server@david.service.d/20-madlik-fork.conf
+sudo cp /opt/madlik-code-server/backups/before-browser-color-scheme-20261014/20-madlik-fork.conf /etc/systemd/system/code-server@david.service.d/20-madlik-fork.conf
 sudo systemctl daemon-reload
 sudo systemctl restart code-server@david
 ```
@@ -72,3 +96,34 @@ The original pre-mobile configuration/data archive is root-only:
 
 Ordinary binary rollback does not require restoring that archive. Restoring it
 would overwrite newer user data.
+
+## Temporary standalone clipboard page
+
+For the iPhone investigation, `madlik/diagnostics/clipboard.html` and `clipboard.js`
+were copied as root-owned static files into the current release's
+`madlik-diagnostics/` directory. This is an additive diagnostic, outside the build
+identity; no executable distribution files or configuration were changed.
+The existing authenticated gateway serves the page at
+`/code/_static/madlik-diagnostics/clipboard.html`. It loads no VS Code assets and
+uses no iframe. A Chromium HTTPS smoke check verifies login gating, trusted mobile
+click, real clipboard reading and error output. The pending Safari prompt remains
+a manual device investigation. These temporary files are not staged into future
+preview builds.
+
+## Browser color scheme trial
+
+In mobile mode, html/body now receive the active VS Code theme's dark/light
+color-scheme and editor background color. Theme changes update both immediately;
+leaving mobile or disposing the contribution restores the previous inline values
+and priorities. Focused TypeScript checking and an isolated Chromium test passed
+for live Light Modern / Dark Modern switching and desktop style restoration.
+The owner confirmed that this change fixed the iOS keyboard accessory-bar
+background color. No theme-color meta, network, authentication or CSP settings were changed.
+
+## Known clipboard issue at this checkpoint
+
+Explorer context menus currently work on the owner's phone, while direct Paste
+can remain pending without a native confirmation. The manual textarea dialog works.
+Earlier standalone authorization enabled direct Paste temporarily. No clipboard or
+Explorer implementation changes were made during the latest investigation; see
+[CLIPBOARD.md](CLIPBOARD.md) for confirmed observations and unproven hypotheses.

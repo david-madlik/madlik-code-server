@@ -11,8 +11,7 @@ try {
  await page.locator('[data-section="terminal"]').tap();
  const input=page.locator('.terminal-wrapper.active:visible .xterm-helper-textarea').first();await input.waitFor({state:'attached',timeout:30000});await input.focus();
  const provider=page.locator('[data-action="keyboard-provider"]'),toggle=page.locator('[data-action="keyboard"]'),code=page.locator('.madlik-code-keyboard');
- await expect(provider).toHaveText('Code');await expect(provider).toHaveAttribute('role','switch');await expect(provider).toHaveAttribute('aria-checked','false');await expect(page.getByRole('group',{name:'Keyboard controls'})).toBeVisible();await toggle.tap();await expect(code).toBeVisible();await expect(input).toHaveAttribute('inputmode','none');
- await provider.tap();await expect(provider).toHaveText('Native');await expect(provider).toHaveAttribute('aria-checked','true');await expect(code).toBeHidden();await expect(input).toBeFocused();
+ await expect(provider).toHaveText('Native');await expect(provider).toHaveAttribute('role','switch');await expect(provider).toHaveAttribute('aria-checked','true');await expect(page.getByRole('group',{name:'Keyboard controls'})).toBeVisible();await toggle.tap();await expect(code).toBeHidden();await expect(input).toBeFocused();
  prefix=path.join(cache,`code-input-${Date.now()}`);const fixture=path.join(cache,'code-input.py');
  await writeFile(fixture,`import sys,os,tty,termios,select,time\nfd=sys.stdin.fileno();previous=termios.tcgetattr(fd)\ntry:\n tty.setraw(fd)\n open(sys.argv[1]+'.ready','w').close()\n with open(sys.argv[1]+'.bin','wb') as out:\n  until=time.monotonic()+120\n  while time.monotonic()<until and not os.path.exists(sys.argv[1]+'.stop'):\n   if select.select([fd],[],[],0.1)[0]:out.write(os.read(fd,65536));out.flush()\nfinally:\n termios.tcsetattr(fd,termios.TCSADRAIN,previous)\n open(sys.argv[1]+'.done','w').close()\n`);
  await page.keyboard.press('Control+u');await page.keyboard.type(`python3 '${fixture}' '${prefix}'`);await page.keyboard.press('Enter');
@@ -23,7 +22,7 @@ try {
  await press('q');await press('{shift}');await press('A');await press('{bksp}');await press('{space}');
  await layer('numbers');await press('1');await layer('symbols');await press('{');await press('|');
  await layer('abc');await layer('ctrl');await press('c');await layer('alt');await press('x');
- await layer('fn');await press('{f1}');await press('{f12}');await press('{shift}');await press('{f5}');await press('{shift}');await layer('ctrl');await page.getByRole('button',{name:'←',exact:true}).tap();
+ await layer('fn');await press('{f1}');await press('{f12}');await press('{shift}');await press('{f5}');await press('{shift}');await layer('ctrl');await page.getByRole('button',{name:'Arrow left',exact:true}).tap();
  await expect.poll(()=>readFile(prefix+'.bin','utf8')).toBe('qA\x7f 1{|\x03\x1bx\x1bOP\x1b[24~\x1b[15;2~\x1b[1;5D');
  results.push('Real touch input: ABC, one-shot Shift, Backspace, space, numbers, braces, pipe, Ctrl+C, Alt+x, F1/F12, Shift+F5 and Ctrl+Left reach the PTY exactly');
  expect(await input.evaluate(el=>document.activeElement===el)).toBe(false);
@@ -38,6 +37,8 @@ try {
  await press('c');await expect.poll(()=>readFile(prefix+'.bin','utf8')).toBe(afterCtrlHold+'c');
  expect(await key('c').locator('span').evaluate(el=>getComputedStyle(el).userSelect)).toBe('none');
  expect(await page.evaluate(()=>window.getSelection()?.toString())).toBe('');
+ await key('c').locator('span').evaluate(el=>{const range=document.createRange();range.selectNodeContents(el);const selection=document.getSelection();selection.removeAllRanges();selection.addRange(range)});
+ await expect.poll(()=>page.evaluate(()=>document.getSelection()?.toString())).toBe('');
  await cdp.detach();results.push('Hold repeats Backspace and Ctrl+C, stops on release, consumes Ctrl after release and never selects key labels');
  const darkColor=await key('q').evaluate(el=>getComputedStyle(el).backgroundColor);
  async function theme(name){

@@ -15,6 +15,19 @@ const results = [];
 let currentPage;
 const partId = { files: 'workbench.parts.sidebar', git: 'workbench.parts.sidebar', editor: 'workbench.parts.editor', terminal: 'workbench.parts.panel' };
 
+async function checkHeaderRows(page, part, stacked) {
+  await expect.poll(()=>page.evaluate(({part,stacked})=>{
+    const root=document.querySelector(part==='editor'?'.editor-group-container.active':'.part.panel');
+    const title=root?.querySelector(':scope > .title');
+    const actions=title?.querySelector(part==='editor'?'.editor-actions':':scope > .title-actions');
+    const tabs=title?.querySelector(part==='editor'?'.tabs-and-actions-container > .monaco-scrollable-element':':scope > .composite-bar-container');
+    const content=root?.querySelector(part==='editor'?'.monaco-editor':':scope > .content');
+    if(!title||!actions||!tabs||!content)return false;
+    const a=actions.getBoundingClientRect(),t=tabs.getBoundingClientRect(),c=content.getBoundingClientRect(),h=title.getBoundingClientRect();
+    return stacked ? a.height>0 && t.height>0 && a.bottom<=t.top+1 && c.top>=h.bottom-1 && a.right<=h.right+1 && t.width>=h.width-20 : Math.abs(a.top-t.top)<3;
+  },{part,stacked})).toBe(true);
+}
+
 async function load(context, viewport) {
   const page = await context.newPage();
   currentPage = page;
@@ -80,6 +93,8 @@ try {
     await page.locator('.explorer-folders-view').getByText('hello.ts', {exact:true}).dblclick();
     await expect(page.locator('[data-section="editor"]')).toHaveAttribute('aria-pressed','true');
     await expect(page.locator('.monaco-editor').first()).toBeVisible();
+    await checkHeaderRows(page,'editor',true);
+    await page.screenshot({path:`.madlik/screenshots/${viewport.width}-editor-stacked.png`});
     const editorInput = page.locator('.monaco-editor .native-edit-context, .monaco-editor textarea.inputarea').first();
     await expect(editorInput).toHaveAttribute('inputmode','none');
     await editorInput.focus();
@@ -102,6 +117,8 @@ try {
     await expect(page.locator('.monaco-diff-editor').first()).toBeVisible();
     await select(page,'terminal');
     console.log('terminal persistence',viewport.width);
+    await checkHeaderRows(page,'terminal',true);
+    await page.screenshot({path:`.madlik/screenshots/${viewport.width}-terminal-stacked.png`});
     const terminal = page.locator('.terminal-wrapper.active:visible .xterm-helper-textarea').first();
     await terminal.waitFor({state:'attached',timeout:15000});
     await expect(terminal).toHaveAttribute('inputmode','none');
@@ -134,7 +151,7 @@ try {
     await page.locator('.madlik-mobile-terminal-keys button').last().click();
     await expect.poll(async()=>{try{return await readFile(marker+'.done','utf8')}catch{return ''}}).toBe('done');
     await keyboard(page,false);
-    results.push(`${viewport.width}x${viewport.height}: modes, native Explorer/file, Git stage/unstage/diff, terminal process persistence, browse/typing focus gate, Enter and Ctrl+C with keyboard closed OK`);
+    results.push(`${viewport.width}x${viewport.height}: stacked editor/terminal headers with content below, modes, native Explorer/file, Git stage/unstage/diff, terminal process persistence, browse/typing focus gate, Enter and Ctrl+C with keyboard closed OK`);
     console.log('mode toggle and rotation',viewport.width);
     await command(page, 'Madlik Mobile: Disable');
     await expect(page.locator('.madlik-mobile-navigation')).toBeHidden();
@@ -149,6 +166,9 @@ try {
   const desktopContext = await browser.newContext({viewport:{width:1440,height:900}});
   const desktop = await load(desktopContext,{width:1440,height:900});
   await expect(desktop.locator('.madlik-mobile-navigation')).toBeHidden();
+  await desktop.locator('.explorer-folders-view').getByText('hello.ts',{exact:true}).dblclick();
+  await expect(desktop.locator('.monaco-editor').first()).toBeVisible();
+  await checkHeaderRows(desktop,'editor',false);
   const before = await desktop.locator('[id="workbench.parts.editor"]').boundingBox();
   await desktop.keyboard.press('F1');
   const desktopInput = desktop.locator('.quick-input-widget input').first();
@@ -168,6 +188,7 @@ try {
   await desktop.setViewportSize({width:1440,height:900});
   await expect(desktop.locator('.madlik-mobile-navigation')).toBeHidden();
   await expect.poll(()=>desktop.locator('[id="workbench.parts.editor"]').boundingBox()).toEqual(before);
+  await checkHeaderRows(desktop,'editor',false);
   await desktop.keyboard.press('F1');
   await expect(desktopInput).toBeFocused();
   await expect(desktopInput).not.toHaveAttribute('inputmode','none');

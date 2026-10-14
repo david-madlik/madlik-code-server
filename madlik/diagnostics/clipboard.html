@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; base-uri 'none'; form-action 'none'">
+<title>Standalone clipboard test</title>
+<script src="clipboard.js" defer></script>
+</head>
+<body>
+<h1>Standalone clipboard test</h1>
+<p>Copy text in another app, tap Paste once, then choose the system Paste option if it appears.</p>
+<button type="button" id="paste">Paste</button>
+<pre id="result">Ready. No VS Code, iframe or custom touch handlers.
+Clipboard content will not be displayed, sent or stored.</pre>
+<p><a href="/code/">Return to VS Code</a></p>
+</body>
+</html>

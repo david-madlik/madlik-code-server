@@ -92,13 +92,21 @@ then falls back to Clipboard API. On success it closes the menu and clears the
 selection; failure retains the selection and reports an error. Clipboard controls
 handle real touch gestures rather than relying on compatibility clicks after a drag.
 
-Paste opens a native HTML dialog attached outside xterm. Its ordinary textarea
-supports the browser's own Paste action and native keyboard. Only **Paste into
-terminal** sends the reviewed value through public `raw.paste`; Cancel/Escape sends
-nothing. The field is cleared on reopening. No automatic `clipboard.readText`,
-clipboard polling or simulated Shift+Insert is used. xterm handles bracketed paste
-and line endings without an extra Enter. The dialog is outside the terminal to
-avoid terminal focus, gesture and context-menu interception.
+The context menu is selection-only: Copy and an enlarged × to clear/close selection. Paste lives in the persistent
+terminal helper row. Its native click handler starts `navigator.clipboard.readText`
+synchronously before any asynchronous work, then sends the result through public
+`raw.paste`. A terminal/controller WeakMap routes to the active terminal without
+DOM lookups. While pending, repeated requests are ignored, but the button stays enabled,
+focused and visually unchanged; no modal or focus change hides
+the browser's authorization callout. A generation guard cancels stale results.
+
+Denied, empty or unanswered (15-second timeout) clipboard reads open a native HTML
+dialog outside xterm. Its ordinary textarea supports the browser's Paste action.
+Only **Paste into terminal** sends the reviewed value; Cancel/Escape sends nothing.
+Late clipboard results cannot paste after the timeout. The field is cleared on
+reopening. There is no clipboard polling or simulated Shift+Insert. xterm handles
+bracketed paste and line endings without an extra Enter. The dialog is outside the
+terminal to avoid terminal focus, gesture and context-menu interception.
 
 ## xterm scroll compatibility
 
@@ -122,3 +130,39 @@ not universally covered. Leaving mobile restores the original metrics.
 Code keyboard colors use live VS Code theme variables. Key geometry is separate
 from font scaling: navigation retains touch-sized controls and Code uses compact
 38 px keys. Layout tracks visualViewport and safe-area insets for device keyboards.
+
+## Mobile title bar rows
+
+The multiple-editor-tab title uses CSS grid for an actions row above the full-width
+native scrolling tab strip. `MultiEditorTabsControl` reserves two tab heights in
+mobile mode and keeps its tab strip horizontally scrollable even when desktop tab
+wrapping is configured; no user setting is changed. The group relayout propagates
+title height changes to Monaco and diff editor dimensions. Desktop keeps its normal
+height and wrapping behavior.
+
+The panel title uses the same actions-first structure. `PartLayout` reserves two
+title rows only for `Parts.PANEL_PART` while the window's mobile layout is active.
+The panel title receives its computed height through a CSS variable, so fixed
+upstream title CSS cannot compress the two rows. The panel composite bar measures
+its lower row independently of the toolbar width,
+so labels have the full row. Sidebar titles and desktop part dimensions retain
+their existing behavior. Existing toolbar actions and native tabs stay in their
+owned DOM nodes; CSS changes their placement rather than cloning controls.
+
+The Code keyboard is appended after the section buttons and grouped provider/toggle
+control. Its full-width grid row is the bottommost navigation child, immediately
+above the existing device safe-area padding. Showing/hiding it uses the existing
+window-local layout reservation; native keyboard mode is unchanged.
+
+Native is the default provider; choosing Code remains a window-local switch. The
+four section controls render native Codicons (files, source-control, code, terminal)
+with English aria-labels/tooltips rather than visible text. Code keyboard selection
+is prevented in capture pointer/touch/selectstart handlers before shifted layouts
+rerender, in addition to scoped user-select:none CSS. A selectionchange guard clears
+only ranges touching Code keyboard labels, leaving editor/terminal selection alone.
+
+The contribution subscribes to IThemeService for mobile browser color-scheme and
+html/body background synchronization. It uses actual theme colors (not CSS vars
+scoped to the workbench), snapshots inline values/priorities on entering mobile,
+and restores them on desktop/disposal. This requests matching native browser
+control colors; iOS accessory bar appearance is still controlled by the OS/browser.

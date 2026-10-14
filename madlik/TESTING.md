@@ -11,7 +11,7 @@ modify working projects or their Git configuration.
 | --- | --- |
 | `test-mobile.mjs` | 390×844 and 375×667 sections, native file/diff opening, Git stage/unstage, terminal process survival, native focus gate and helper keys; 1440×900 simultaneous desktop/mobile isolation, reload and layout restoration |
 | `test-terminal-touch.mjs` | Real touch/scroll/inertia, SGR 1006 and 1016, missing-coordinate events, rejection of invalid gestures and no NaN input |
-| `test-clipboard.mjs` | Native xterm word/range selection and both handles, touch and mouse Copy, closing/clearing on copy, real browser Ctrl+V into the separate dialog, explicit bracketed paste, Cancel, reopening and mobile resize |
+| `test-clipboard.mjs` | Native xterm word/range selection and both handles, touch and mouse Copy, closing/clearing on copy, enlarged × close, absence of Select All, persistent Paste with real clipboard and bracketed PTY input, pending request without disabling/changing the click target, rejected-read fallback, real browser Ctrl+V into the separate dialog, explicit bracketed paste, Cancel, reopening and mobile resize |
 | `test-code-keyboard.mjs` | Exact raw PTY bytes for text, symbols, Ctrl/Alt, F1/F12, Shift+F5 and Ctrl+Left; Backspace/Ctrl hold and release; no label selection; grouped Native/Code switch and focus; actual light/dark theme selection; 375×667 fit; Monaco edit/delete; desktop input restoration |
 
 The focused TypeScript check covers the changed production modules and imported
@@ -84,3 +84,29 @@ Other unverified areas include all custom shortcuts, extension webviews,
 synchronized profiles, moved custom view containers, every split-editor/Zen Mode
 combination, full portable distribution packaging and updates to another upstream
 release. No automated Safari/WebKit device suite is provided.
+
+The persistent direct Paste button is covered in Chromium; Safari/iPhone clipboard
+authorization and callout behavior still require a device trial.
+
+Device follow-up: the owner reported successful direct Paste after confirming the
+native Paste callout on the standalone same-origin diagnostic, and reported that
+it continued to work after restarting the browser. The precise browser cause and
+permission lifetime are unconfirmed.
+
+The mobile layout suite now also checks editor and terminal header geometry at
+390 × 844 and 375 × 667: toolbar above tabs, full-width tab row, content below the
+entire title, and desktop editor toolbar/tab alignment before and after mobile
+resize restoration. Screenshots capture both stacked headers.
+
+Native-default follow-up: the keyboard suite now starts with Native, verifies focus
+on opening it, switches to Code for real PTY input and holds, and checks that a
+selection touching a key label is cleared. Existing clipboard/touch fixtures choose
+Native explicitly only when necessary. Live smoke checks navigation Codicons and
+English accessible labels.
+
+Latest device feedback supersedes the earlier successful direct-Paste observation:
+Explorer context menus currently work, but direct Paste may stall without a native
+confirmation; textarea fallback still works. The owner confirmed the browser
+color-scheme change fixed the native keyboard accessory-bar background. The
+clipboard issue is open; see [CLIPBOARD.md](CLIPBOARD.md). Chromium results do not
+establish Safari correctness, and no new clipboard fix is claimed in this checkpoint.
