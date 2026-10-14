@@ -110,3 +110,9 @@ confirmation; textarea fallback still works. The owner confirmed the browser
 color-scheme change fixed the native keyboard accessory-bar background. The
 clipboard issue is open; see [CLIPBOARD.md](CLIPBOARD.md). Chromium results do not
 establish Safari correctness, and no new clipboard fix is claimed in this checkpoint.
+
+Latest follow-up: the owner reports direct Paste and Explorer context menus working
+again without opening either A/B URL. The A/B experiment has no device result and
+has been removed along with standalone manual diagnostics. Normal upstream
+clipboard handling and regression suites remain; the intermittent cause is still
+unconfirmed.

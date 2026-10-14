@@ -34,8 +34,7 @@ passed at widths 375 and 390 px (center offsets below 0.01px), with screenshot
 inspection. The keyboard icon is unchanged. The Code keyboard is now the last child of
 the navigation panel, below section controls and terminal helpers. A preview
 geometry check and screenshots at widths 375 and 390 verify that the keyboard
-ends just above bottom safe-area padding and closes with the keyboard toggle. The floating clipboard probe was
-removed; the standalone authenticated clipboard page is retained. The owner
+ends just above bottom safe-area padding and closes with the keyboard toggle. The floating clipboard probe and standalone diagnostic page were removed. The owner
 reported working direct Paste after using that page, including after browser
 restart. The precise Safari cause and permission lifetime remain unconfirmed.
 The icon change passed the focused TypeScript check and the keyboard suite,
@@ -97,19 +96,6 @@ The original pre-mobile configuration/data archive is root-only:
 Ordinary binary rollback does not require restoring that archive. Restoring it
 would overwrite newer user data.
 
-## Temporary standalone clipboard page
-
-For the iPhone investigation, `madlik/diagnostics/clipboard.html` and `clipboard.js`
-were copied as root-owned static files into the current release's
-`madlik-diagnostics/` directory. This is an additive diagnostic, outside the build
-identity; no executable distribution files or configuration were changed.
-The existing authenticated gateway serves the page at
-`/code/_static/madlik-diagnostics/clipboard.html`. It loads no VS Code assets and
-uses no iframe. A Chromium HTTPS smoke check verifies login gating, trusted mobile
-click, real clipboard reading and error output. The pending Safari prompt remains
-a manual device investigation. These temporary files are not staged into future
-preview builds.
-
 ## Browser color scheme trial
 
 In mobile mode, html/body now receive the active VS Code theme's dark/light
@@ -120,10 +106,15 @@ for live Light Modern / Dark Modern switching and desktop style restoration.
 The owner confirmed that this change fixed the iOS keyboard accessory-bar
 background color. No theme-color meta, network, authentication or CSP settings were changed.
 
-## Known clipboard issue at this checkpoint
+## Clipboard status and diagnostic cleanup
 
-Explorer context menus currently work on the owner's phone, while direct Paste
-can remain pending without a native confirmation. The manual textarea dialog works.
-Earlier standalone authorization enabled direct Paste temporarily. No clipboard or
-Explorer implementation changes were made during the latest investigation; see
-[CLIPBOARD.md](CLIPBOARD.md) for confirmed observations and unproven hypotheses.
+The owner now reports direct Paste and Explorer context menus working together
+again without opening the A/B test links. The cause of earlier intermittent Paste
+failures remains unconfirmed; the textarea fallback is retained.
+
+The temporary A/B source changes were discarded, and the service was returned to
+the accepted release 57a6dc4c649bd400035f883efae73c5f56d34149. The standalone clipboard
+HTML/JS diagnostic files were removed from that active release and from the source
+repository. No diagnostic page, badge or clipboard-test URL switch remains in the
+active distribution. Regression-test scripts remain available. See
+[CLIPBOARD.md](CLIPBOARD.md) for investigation notes, which make no fix claim.

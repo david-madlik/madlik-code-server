@@ -53,18 +53,18 @@ This is an experimental fork used on a Debian VPS. Automated Chromium tests cove
 survival, clipboard selection/paste, keyboard input/repeat, theme switching and
 mobile/desktop layout restoration. The owner has also tried the UI on an iPhone
 and reported working selection, copy, mobile layout and keyboard controls.
-**Known iPhone issue:** Explorer context menus currently work, but direct Paste
-can wait without showing the system confirmation; the textarea fallback works.
-Earlier standalone-page authorization temporarily enabled direct Paste, including
-a browser restart, but this is not reliable permission persistence. See the
-[clipboard investigation](madlik/CLIPBOARD.md) and [validation limits](madlik/TESTING.md).
+Direct Paste has worked intermittently on the owner's iPhone: the latest report
+confirms it works again without visiting a test page, while Explorer context menus
+also work. The cause is still unconfirmed; the textarea fallback remains available.
+See the [clipboard investigation](madlik/CLIPBOARD.md) and [validation limits](madlik/TESTING.md).
 
 The Code keyboard routes input to native VS Code components. Arbitrary customized
 editor shortcuts and extension webview inputs are not fully emulated; switch to
 Native when needed. Browser clipboard permissions and native iOS keyboard UI
-remain controlled by the browser/OS. If the first Paste authorization prompt
-does not appear inside VS Code, the optional [standalone clipboard test](madlik/diagnostics/README.md)
-can help authorize and diagnose access without loading the workbench. No standalone release packages are published.
+remain controlled by the browser/OS. The manual textarea dialog
+remains the fallback when direct clipboard reading is unavailable. Temporary
+manual diagnostic pages and A/B URL switches have been removed. No standalone
+release packages are published.
 
 ## Development
 

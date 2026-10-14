@@ -2,12 +2,12 @@
 
 ## Current device status
 
-The owner currently reports that Explorer context menus work, but pressing the
-terminal Paste helper does not show the system Paste confirmation. Direct reading
-can remain pending until the 15-second timeout. The textarea dialog fallback works.
-Earlier, the system Paste confirmation appeared but Explorer context menus were
-blocked or disrupted. Do not reverse these observations or treat the earlier
-standalone-page success as permanent clipboard permission.
+The latest device report confirms that direct terminal Paste is working again
+without visiting a diagnostic page, and Explorer context menus also work. Earlier
+reports included a missing system Paste confirmation with a pending read, and an
+earlier phase where native Paste confirmation disrupted Explorer context menus.
+The textarea dialog fallback has continued to work. The intermittent cause remains
+unconfirmed; current success is not proof of a permanent fix or permission grant.
 
 The native keyboard accessory-bar background now follows the VS Code theme;
 the owner confirmed the color-scheme change fixed that visual issue. The temporal
@@ -55,6 +55,8 @@ one suspected interaction at a time in an isolated instance. Do not disable the
 Explorer precheck or global Safari workaround on the working instance based only
 on the hypotheses above. Retain the textarea fallback while investigating.
 
-The optional same-origin standalone diagnostic is documented in
-[diagnostics/README.md](diagnostics/README.md). Its success can distinguish browser
-access from workbench interactions but does not guarantee future direct reads.
+The optional standalone diagnostic and the opt-in deferred-write A/B experiment
+were removed at the owner's request. The owner did not open the A/B links before
+reporting that normal Paste worked again, so the experiment produced no device
+comparison and no conclusion about the Safari workaround. Standard upstream
+clipboard handling and Explorer menus are retained.
