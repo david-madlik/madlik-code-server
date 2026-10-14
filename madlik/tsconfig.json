@@ -1,0 +1,19 @@
+{
+  "extends": "../lib/vscode/src/tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../lib/vscode/src",
+    "typeRoots": ["../lib/vscode/node_modules/@types", "../lib/vscode/node_modules"],
+    "types": ["@webgpu/types", "mocha", "semver", "sinon", "trusted-types", "winreg", "wicg-file-system-access"]
+  },
+  "include": [
+    "../lib/vscode/src/typings/**/*.d.ts",
+    "../lib/vscode/src/vscode-dts/vscode*.d.ts",
+    "../lib/vscode/src/vs/monaco.d.ts"
+  ],
+  "files": [
+    "../lib/vscode/src/vs/workbench/browser/layout.ts",
+    "../lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/madlikMobile.contribution.ts",
+    "../lib/vscode/src/vs/workbench/browser/parts/compositePart.ts",
+    "../lib/vscode/src/vs/workbench/browser/parts/editor/editorPart.ts"
+  ]
+}

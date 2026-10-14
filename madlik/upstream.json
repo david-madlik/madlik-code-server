@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/coder/code-server.git",
+  "tag": "v4.141.0",
+  "commit": "8b41915d25547e2edd553bab03ea4cbd621f98c5",
+  "vscodeVersion": "1.141.0",
+  "mobileImplemented": true
+}

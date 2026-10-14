@@ -1,0 +1,482 @@
+Index: madlik-code-server/lib/vscode/src/vs/workbench/browser/layout.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/workbench/browser/layout.ts
++++ madlik-code-server/lib/vscode/src/vs/workbench/browser/layout.ts
+@@ -155,6 +155,67 @@ const DEFAULT_WORKSPACE_WINDOW_DIMENSION
+ 
+ export abstract class Layout extends Disposable implements IWorkbenchLayoutService {
+ 
++	private mobilePart: Parts | undefined;
++	private mobileBottomInset = 0;
++	private mobileSnapshot: { part: ISerializableView; visible: boolean; size: IViewSize; cachedSize: number | undefined }[] | undefined;
++	private desktopSizes: Map<ISerializableView, IViewSize> | undefined;
++	private mobileTransition = false;
++
++	get isMobileLayout(): boolean { return this.mobilePart !== undefined; }
++
++	setMobileLayout(part: Parts.SIDEBAR_PART | Parts.EDITOR_PART | Parts.PANEL_PART | undefined, bottomInset = 0): void {
++		const parts = [this.titleBarPartView, this.bannerPartView, this.activityBarPartView, this.sideBarPartView,
++			this.editorPartView, this.panelPartView, this.auxiliaryBarPartView, this.statusBarPartView];
++		if (part !== undefined && !this.mobileSnapshot) {
++			const narrowGrid = this.workbenchGrid.getViewSize().width <= 768;
++			this.mobileSnapshot = parts.map(view => ({ part: view, visible: this.workbenchGrid.isViewVisible(view),
++				size: (narrowGrid ? this.desktopSizes?.get(view) : undefined) ?? this.workbenchGrid.getViewSize(view),
++				cachedSize: this.workbenchGrid.getViewCachedVisibleSize(view) }));
++		}
++		this.mobileTransition = true;
++		try {
++			this.mobilePart = part;
++			this.mobileBottomInset = part === undefined ? 0 : bottomInset;
++			if (part === undefined) {
++				// Restore visible views first: the grid must always contain at least one visible view.
++				for (const entry of this.mobileSnapshot ?? []) {
++					if (entry.visible) { this.workbenchGrid.setViewVisible(entry.part, true); }
++				}
++				for (const entry of this.mobileSnapshot ?? []) {
++					// Restore resizable peripheral parts, not the editor: it must
++					// absorb the remaining space at the new viewport width.
++					if (entry.part === this.sideBarPartView || entry.part === this.auxiliaryBarPartView || entry.part === this.panelPartView) {
++						const horizontalPanel = entry.part === this.panelPartView && isHorizontal(this.getPanelPosition());
++						const size = !entry.visible && entry.cachedSize !== undefined
++							? { ...entry.size, [horizontalPanel ? 'height' : 'width']: entry.cachedSize } : entry.size;
++						this.workbenchGrid.setViewVisible(entry.part, true);
++						this.workbenchGrid.resizeView(entry.part, size);
++					}
++					this.workbenchGrid.setViewVisible(entry.part, entry.visible);
++				}
++				this.mobileSnapshot = undefined;
++			} else {
++				this.workbenchGrid.setViewVisible(this.getPart(part), true);
++				for (const view of parts) {
++					this.workbenchGrid.setViewVisible(view, view === this.getPart(part));
++				}
++			}
++			for (const [className, view] of [
++				[LayoutClasses.PANEL_HIDDEN, this.panelPartView],
++				[LayoutClasses.SIDEBAR_HIDDEN, this.sideBarPartView],
++				[LayoutClasses.AUXILIARYBAR_HIDDEN, this.auxiliaryBarPartView],
++				[LayoutClasses.ACTIVITYBAR_HIDDEN, this.activityBarPartView],
++				[LayoutClasses.STATUSBAR_HIDDEN, this.statusBarPartView],
++				[LayoutClasses.MAIN_EDITOR_AREA_HIDDEN, this.editorPartView],
++			] as const) {
++				this.mainContainer.classList.toggle(className, !this.workbenchGrid.isViewVisible(view));
++			}
++			this.layout();
++		} finally {
++			this.mobileTransition = false;
++		}
++	}
++
+ 	declare readonly _serviceBrand: undefined;
+ 
+ 	//#region Events
+@@ -358,6 +419,7 @@ export abstract class Layout extends Dis
+ 
+ 		// Restore editor if hidden and an editor is to show
+ 		const showEditorIfHidden = (explicitUserAction?: boolean) => {
++			if (this.isMobileLayout || this.mobileTransition) { return; }
+ 			if (
+ 				this.isVisible(Parts.EDITOR_PART, mainWindow) ||		// already visible
+ 				this.mainPartEditorService.visibleEditors.length === 0	// no editor to show
+@@ -379,6 +441,7 @@ export abstract class Layout extends Dis
+ 
+ 		// Maybe maximize auxiliary bar when no editors are visible
+ 		const maybeMaximizeAuxiliaryBar = () => {
++			if (this.isMobileLayout || this.mobileTransition) { return false; }
+ 			if (
+ 				this.mainPartEditorService.visibleEditors.length === 0 &&
+ 				this.configurationService.getValue(WorkbenchLayoutSettings.AUXILIARYBAR_FORCE_MAXIMIZED) === true
+@@ -1363,6 +1426,9 @@ export abstract class Layout extends Dis
+ 	isVisible(part: SINGLE_WINDOW_PARTS): boolean;
+ 	isVisible(part: Parts, targetWindow?: Window): boolean;
+ 	isVisible(part: Parts, targetWindow: Window = mainWindow): boolean {
++		if (this.isMobileLayout && targetWindow === mainWindow) {
++			return this.workbenchGrid.isViewVisible(this.getPart(part));
++		}
+ 		if (targetWindow !== mainWindow && part === Parts.EDITOR_PART) {
+ 			return true; // cannot hide editor part in auxiliary windows
+ 		}
+@@ -1686,7 +1752,7 @@ export abstract class Layout extends Dis
+ 
+ 		for (const part of [titleBar, editorPart, activityBar, panelPart, sideBar, statusBar, auxiliaryBarPart, bannerPart]) {
+ 			this._register(part.onDidVisibilityChange(visible => {
+-				if (!this.inMaximizedAuxiliaryBarTransition) {
++				if (!this.isMobileLayout && !this.mobileTransition && !this.inMaximizedAuxiliaryBarTransition) {
+ 
+ 					// skip reacting when we are transitioning
+ 					// in or out of maximised auxiliary bar to prevent
+@@ -1719,6 +1785,9 @@ export abstract class Layout extends Dis
+ 		}));
+ 
+ 		this._register(this.storageService.onWillSaveState(() => {
++			// Mobile sizes/visibility belong to this window only. Do not write the
++			// temporary grid into the workspace used by desktop clients.
++			if (this.isMobileLayout || this.mobileTransition) { return; }
+ 
+ 			// Side Bar Size
+ 			const sideBarSize = this.stateModel.getRuntimeValue(LayoutStateKeys.SIDEBAR_HIDDEN)
+@@ -1752,6 +1821,10 @@ export abstract class Layout extends Dis
+ 
+ 	layout(): void {
+ 		if (!this.disposed) {
++			if (!this.isMobileLayout && !this.mobileTransition && this.workbenchGrid.getViewSize().width > 768) {
++				this.desktopSizes = new Map([this.sideBarPartView, this.panelPartView, this.auxiliaryBarPartView]
++					.map(view => [view, this.workbenchGrid.getViewSize(view)]));
++			}
+ 			this._mainContainerDimension = getClientArea(this.state.runtime.mainWindowFullscreen ?
+ 				mainWindow.document.body : 	// in fullscreen mode, make sure to use <body> element because
+ 				this.parent,				// in that case the workbench will span the entire site
+@@ -1763,7 +1836,9 @@ export abstract class Layout extends Dis
+ 			size(this.mainContainer, this._mainContainerDimension.width, this._mainContainerDimension.height);
+ 
+ 			// Layout the grid widget
+-			this.workbenchGrid.layout(this._mainContainerDimension.width, this._mainContainerDimension.height);
++			const viewport = this.isMobileLayout ? mainWindow.visualViewport : undefined;
++			const availableHeight = Math.min(this._mainContainerDimension.height, viewport?.height ?? this._mainContainerDimension.height);
++			this.workbenchGrid.layout(this._mainContainerDimension.width, Math.max(0, availableHeight - this.mobileBottomInset));
+ 			this.initialized = true;
+ 
+ 			// Emit as event
+@@ -1901,6 +1976,7 @@ export abstract class Layout extends Dis
+ 	}
+ 
+ 	private setEditorHidden(hidden: boolean): void {
++		if (this.isMobileLayout || this.mobileTransition) { return; }
+ 		if (!hidden && this.setAuxiliaryBarMaximized(false) && this.isVisible(Parts.EDITOR_PART)) {
+ 			return; // return: leaving maximised auxiliary bar made this part visible
+ 		}
+@@ -1946,6 +2022,7 @@ export abstract class Layout extends Dis
+ 	}
+ 
+ 	private setSideBarHidden(hidden: boolean): void {
++		if (this.isMobileLayout || this.mobileTransition) { return; }
+ 		if (!hidden && this.setAuxiliaryBarMaximized(false) && this.isVisible(Parts.SIDEBAR_PART)) {
+ 			return; // return: leaving maximised auxiliary bar made this part visible
+ 		}
+@@ -2085,6 +2162,7 @@ export abstract class Layout extends Dis
+ 	}
+ 
+ 	private setPanelHidden(hidden: boolean, skipLayout?: boolean): void {
++		if (this.isMobileLayout || this.mobileTransition) { return; }
+ 		if (!this.workbenchGrid) {
+ 			return; // Return if not initialized fully (https://github.com/microsoft/vscode/issues/105480)
+ 		}
+@@ -2288,6 +2366,7 @@ export abstract class Layout extends Dis
+ 	}
+ 
+ 	private setAuxiliaryBarHidden(hidden: boolean, skipLayout?: boolean): void {
++		if (this.isMobileLayout || this.mobileTransition) { return; }
+ 		if (hidden && this.setAuxiliaryBarMaximized(false) && !this.isVisible(Parts.AUXILIARYBAR_PART)) {
+ 			return; // return: leaving maximised auxiliary bar made this part hidden
+ 		}
+Index: madlik-code-server/lib/vscode/src/vs/workbench/browser/parts/compositePart.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/workbench/browser/parts/compositePart.ts
++++ madlik-code-server/lib/vscode/src/vs/workbench/browser/parts/compositePart.ts
+@@ -221,7 +221,9 @@ export abstract class CompositePart<T ex
+ 
+ 		// Store in preferences
+ 		const id = this.activeComposite.getId();
+-		if (id !== this.defaultCompositeId) {
++		if (this.layoutService.isMobileLayout) {
++			// Do not change the desktop client's last selected view container.
++		} else if (id !== this.defaultCompositeId) {
+ 			this.storageService.store(this.activeCompositeSettingsKey, id, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+ 		} else {
+ 			this.storageService.remove(this.activeCompositeSettingsKey, StorageScope.WORKSPACE);
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/madlikMobile.contribution.ts
+===================================================================
+--- /dev/null
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/madlikMobile.contribution.ts
+@@ -0,0 +1,182 @@
++/*---------------------------------------------------------------------------------------------
++ * Copyright (c) Madlik. All rights reserved.
++ * Licensed under the MIT License. See License.txt in the project root.
++ *--------------------------------------------------------------------------------------------*/
++
++import './media/madlikMobile.css';
++import { addDisposableListener } from '../../../../base/browser/dom.js';
++import { mainWindow } from '../../../../base/browser/window.js';
++import { isWeb } from '../../../../base/common/platform.js';
++import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
++import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
++import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
++import { IPaneCompositePartService } from '../../../services/panecomposite/browser/panecomposite.js';
++import { ViewContainerLocation } from '../../../common/views.js';
++import { IEditorService } from '../../../services/editor/common/editorService.js';
++import { ICommandService, CommandsRegistry } from '../../../../platform/commands/common/commands.js';
++import { INotificationService } from '../../../../platform/notification/common/notification.js';
++import { MenuId, MenuRegistry } from '../../../../platform/actions/common/actions.js';
++import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
++
++type Mode = 'auto' | 'on' | 'off';
++type Section = 'files' | 'git' | 'editor' | 'terminal';
++
++class MadlikMobile extends Disposable {
++	static readonly ID = 'madlik.mobile';
++	private readonly media = mainWindow.matchMedia('(max-width: 768px)');
++	private mode: Mode = 'auto';
++	private section: Section = 'editor';
++	private active = false;
++	private switching = false;
++	private generation = 0;
++	private queue: Promise<void> = Promise.resolve();
++	private readonly nav = mainWindow.document.createElement('nav');
++	private readonly terminalKeys = mainWindow.document.createElement('div');
++	private readonly buttons = new Map<Section, HTMLButtonElement>();
++	private previousSidebar: string | undefined;
++	private previousPanel: string | undefined;
++
++	constructor(
++		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
++		@IPaneCompositePartService private readonly panes: IPaneCompositePartService,
++		@IEditorService private readonly editors: IEditorService,
++		@ICommandService private readonly commands: ICommandService,
++		@INotificationService private readonly notifications: INotificationService,
++		@IQuickInputService private readonly quickInput: IQuickInputService,
++	) {
++		super();
++		if (!isWeb) { return; }
++		this.nav.className = 'madlik-mobile-navigation';
++		this.nav.hidden = true;
++		this.nav.setAttribute('aria-label', 'Madlik mobilní navigace');
++		this.terminalKeys.className = 'madlik-mobile-terminal-keys';
++		this.terminalKeys.hidden = true;
++		this.terminalKeys.setAttribute('aria-label', 'Terminálové klávesy');
++		for (const [label, text] of [['Ctrl+C', '\u0003'], ['Esc', '\u001b'], ['Tab', '\t'], ['↑', '\u001b[A'], ['↓', '\u001b[B']]) {
++			const key = mainWindow.document.createElement('button');
++			key.type = 'button';
++			key.textContent = label;
++			this.terminalKeys.appendChild(key);
++			this._register(addDisposableListener(key, 'click', () => {
++				this.commands.executeCommand('workbench.action.terminal.sendSequence', { text }).catch(error => this.notifications.error(error));
++			}));
++		}
++		this.nav.appendChild(this.terminalKeys);
++		for (const [section, label] of [['files', 'Soubory'], ['git', 'Git'], ['editor', 'Editor'], ['terminal', 'Terminál']] as const) {
++			const button = mainWindow.document.createElement('button');
++			button.type = 'button';
++			button.textContent = label;
++			button.dataset.section = section;
++			this.nav.appendChild(button);
++			this.buttons.set(section, button);
++			this._register(addDisposableListener(button, 'click', () => this.select(section)));
++		}
++		const options = mainWindow.document.createElement('button');
++		options.type = 'button';
++		options.textContent = '⋯';
++		options.setAttribute('aria-label', 'Mobilní režim a příkazy');
++		this.nav.appendChild(options);
++		this._register(addDisposableListener(options, 'click', () => {
++			this.quickInput.pick([
++				{ label: 'Automaticky podle šířky', mode: 'auto' as const },
++				{ label: 'Mobilní režim zapnutý', mode: 'on' as const },
++				{ label: 'Vypnout mobilní režim', mode: 'off' as const },
++				{ label: 'Paleta příkazů', mode: undefined },
++			], { placeHolder: 'Madlik Mobile' }).then(item => {
++				if (item?.mode) { this.mode = item.mode; this.updateMode(); }
++				else if (item) { this.commands.executeCommand('workbench.action.showCommands'); }
++			}).catch(error => this.notifications.error(error));
++		}));
++		this.layoutService.mainContainer.appendChild(this.nav);
++		this._register(toDisposable(() => this.nav.remove()));
++		const mediaChanged = () => this.updateMode();
++		this.media.addEventListener('change', mediaChanged);
++		this._register(toDisposable(() => this.media.removeEventListener('change', mediaChanged)));
++		this._register(addDisposableListener(mainWindow, 'resize', () => this.resize()));
++		if (mainWindow.visualViewport) {
++			this._register(addDisposableListener(mainWindow.visualViewport, 'resize', () => this.resize()));
++			this._register(addDisposableListener(mainWindow.visualViewport, 'scroll', () => this.resize()));
++		}
++		this._register(this.editors.onWillOpenEditor(() => {
++			if (this.active && !this.switching && (this.section === 'files' || this.section === 'git')) {
++				this.select('editor');
++			}
++		}));
++		for (const mode of ['auto', 'on', 'off'] as const) {
++			const id = `madlik.mobile.${mode}`;
++			this._register(CommandsRegistry.registerCommand(id, () => { this.mode = mode; this.updateMode(); }));
++			this._register(MenuRegistry.appendMenuItem(MenuId.CommandPalette, { command: { id, title: `Madlik Mobile: ${mode === 'auto' ? 'Automaticky' : mode === 'on' ? 'Zapnout' : 'Vypnout'}` } }));
++		}
++		for (const section of this.buttons.keys()) {
++			this._register(CommandsRegistry.registerCommand(`madlik.mobile.${section}`, () => { this.select(section); return this.queue; }));
++		}
++		this._register(toDisposable(() => { if (this.active) { this.layoutService.setMobileLayout(undefined); } }));
++		this.updateMode();
++	}
++
++	private updateMode(): void {
++		const active = this.mode === 'on' || (this.mode === 'auto' && this.media.matches);
++		if (active === this.active) { return; }
++		this.active = active;
++		this.generation++;
++		this.nav.hidden = !active;
++		this.layoutService.mainContainer.classList.toggle('madlik-mobile', active);
++		if (active) {
++			if (!this.layoutService.isMobileLayout) {
++				this.previousSidebar = this.panes.getActivePaneComposite(ViewContainerLocation.Sidebar)?.getId();
++				this.previousPanel = this.panes.getActivePaneComposite(ViewContainerLocation.Panel)?.getId();
++			}
++			this.select('editor');
++		} else {
++			// Cancel queued mobile switches before restoring the native layout.
++			const generation = this.generation;
++			this.queue = this.queue.then(async () => {
++				if (this.active || generation !== this.generation) { return; }
++				this.switching = true;
++				try {
++					if (this.previousSidebar) { await this.panes.openPaneComposite(this.previousSidebar, ViewContainerLocation.Sidebar, false); }
++					if (this.previousPanel) { await this.panes.openPaneComposite(this.previousPanel, ViewContainerLocation.Panel, false); }
++				} finally {
++					this.layoutService.setMobileLayout(undefined);
++					this.switching = false;
++				}
++			}).catch(error => this.notifications.error(error));
++		}
++	}
++
++	private select(section: Section): void {
++		if (!this.active) { return; }
++		const generation = this.generation;
++		this.queue = this.queue.then(async () => {
++			if (!this.active || generation !== this.generation) { return; }
++			this.switching = true;
++			try {
++				this.section = section;
++				this.resize();
++				if (section === 'files' || section === 'git') {
++					await this.panes.openPaneComposite(section === 'files' ? 'workbench.view.explorer' : 'workbench.view.scm', ViewContainerLocation.Sidebar, true);
++				} else if (section === 'terminal') {
++					await this.commands.executeCommand('workbench.action.terminal.focus');
++				} else {
++					this.layoutService.focusPart(Parts.EDITOR_PART, mainWindow);
++				}
++				if (this.active && generation === this.generation) { this.resize(); }
++			} finally { this.switching = false; }
++		}).catch(error => this.notifications.error(error));
++	}
++
++	private resize(): void {
++		if (!this.active) { return; }
++		this.terminalKeys.hidden = this.section !== 'terminal';
++		for (const [section, button] of this.buttons) {
++			button.setAttribute('aria-pressed', String(section === this.section));
++		}
++		const viewport = mainWindow.visualViewport;
++		const container = this.layoutService.mainContainer.getBoundingClientRect();
++		this.nav.style.top = `${(viewport?.offsetTop ?? 0) + (viewport?.height ?? container.height) - this.nav.offsetHeight - container.top}px`;
++		const part = this.section === 'files' || this.section === 'git' ? Parts.SIDEBAR_PART : this.section === 'terminal' ? Parts.PANEL_PART : Parts.EDITOR_PART;
++		this.layoutService.setMobileLayout(part, this.nav.offsetHeight);
++	}
++}
++
++registerWorkbenchContribution2(MadlikMobile.ID, MadlikMobile, WorkbenchPhase.AfterRestored);
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/media/madlikMobile.css
+===================================================================
+--- /dev/null
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/media/madlikMobile.css
+@@ -0,0 +1,48 @@
++.monaco-workbench .madlik-mobile-navigation {
++	position: absolute;
++	left: 0;
++	right: 0;
++	z-index: 100;
++	display: grid;
++	grid-template-columns: repeat(4, minmax(0, 1fr)) 44px;
++	gap: 4px;
++	padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
++	box-sizing: border-box;
++	background: var(--vscode-sideBar-background);
++	border-top: 1px solid var(--vscode-panel-border);
++}
++
++.monaco-workbench .madlik-mobile-navigation[hidden] { display: none; }
++
++.monaco-workbench .madlik-mobile-terminal-keys {
++	grid-column: 1 / -1;
++	display: grid;
++	grid-template-columns: repeat(5, minmax(0, 1fr));
++	gap: 4px;
++}
++
++.monaco-workbench .madlik-mobile-terminal-keys[hidden] { display: none; }
++
++.monaco-workbench .madlik-mobile-navigation button {
++	min-height: 44px;
++	min-width: 0;
++	border: 1px solid transparent;
++	border-radius: 6px;
++	font: inherit;
++	font-size: 13px;
++	color: var(--vscode-foreground);
++	background: transparent;
++	touch-action: manipulation;
++	cursor: pointer;
++}
++
++.monaco-workbench .madlik-mobile-navigation button[aria-pressed="true"] {
++	background: var(--vscode-button-background);
++	color: var(--vscode-button-foreground);
++	border-color: var(--vscode-contrastBorder, transparent);
++}
++
++.monaco-workbench .madlik-mobile-navigation button:focus-visible {
++	outline: 2px solid var(--vscode-focusBorder);
++	outline-offset: -2px;
++}
+Index: madlik-code-server/lib/vscode/src/vs/workbench/services/layout/browser/layoutService.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/workbench/services/layout/browser/layoutService.ts
++++ madlik-code-server/lib/vscode/src/vs/workbench/services/layout/browser/layoutService.ts
+@@ -491,6 +491,10 @@ export interface IPartVisibilityChangeEv
+ 
+ export interface IWorkbenchLayoutService extends ILayoutService {
+ 
++	/** Madlik: transient, window-local layout; never writes desktop preferences. */
++	readonly isMobileLayout: boolean;
++	setMobileLayout(part: Parts.SIDEBAR_PART | Parts.EDITOR_PART | Parts.PANEL_PART | undefined, bottomInset?: number): void;
++
+ 	readonly _serviceBrand: undefined;
+ 
+ 	/**
+Index: madlik-code-server/lib/vscode/src/vs/workbench/workbench.common.main.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/workbench/workbench.common.main.ts
++++ madlik-code-server/lib/vscode/src/vs/workbench/workbench.common.main.ts
+@@ -16,6 +16,9 @@ import './common/agentsSizes.js';
+ 
+ //#endregion
+ 
++// Madlik mobile UI (transient layout, browser workbench only)
++import './contrib/madlikMobile/browser/madlikMobile.contribution.js';
++
+ 
+ //#region --- workbench actions
+ 
+Index: madlik-code-server/lib/vscode/src/vs/workbench/browser/parts/editor/editorPart.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/workbench/browser/parts/editor/editorPart.ts
++++ madlik-code-server/lib/vscode/src/vs/workbench/browser/parts/editor/editorPart.ts
+@@ -1483,6 +1483,9 @@ export class EditorPart extends Part<IEd
+ 	}
+ 
+ 	protected override saveState(): void {
++		if (this.layoutService.isMobileLayout) {
++			return; // Mobile grid dimensions must not overwrite desktop editor group sizes.
++		}
+ 
+ 		// Persist grid UI state
+ 		if (this.gridWidget) {
+Index: madlik-code-server/lib/vscode/src/vs/workbench/test/browser/workbenchTestServices.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/workbench/test/browser/workbenchTestServices.ts
++++ madlik-code-server/lib/vscode/src/vs/workbench/test/browser/workbenchTestServices.ts
+@@ -627,6 +627,8 @@ export class TestFileDialogService imple
+ }
+ 
+ export class TestLayoutService implements IWorkbenchLayoutService {
++	readonly isMobileLayout = false;
++	setMobileLayout(): void { }
+ 
+ 	declare readonly _serviceBrand: undefined;
+ 
