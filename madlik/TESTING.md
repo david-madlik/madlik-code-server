@@ -41,3 +41,21 @@ Vývojový incident: počáteční neomezený souběh kompilace a plné typové 
 vyčerpal RAM VPS a systém ukončil Unity editor. Následující buildy běžely pod
 limitem paměti systemd. Build náhledu odmítá start pod 6 GiB dostupné RAM.
 Plná kontrola všech upstream typů nebyla dokončena; nepovažovat esbuild za typovou kontrolu.
+
+## Regrese dotykového scrollování terminálu
+
+`node madlik/test-terminal-touch.mjs` proti izolovanému preview, Chromium
+390 × 844 s dotykovým vstupem. Před opravou test reprodukoval příjem
+`ESC[<65;NaN;NaNM` v raw-mode aplikaci; log `.madlik/test-touch-before.log`.
+Po opravě prošly režimy SGR 1006 (buňky) i SGR 1016 (pixely):
+
+- Skutečný touchStart/move/end přes CDP včetně doběhu po zvednutí prstu.
+- Explicitní inerciální událost bez souřadnic dál posílá scrollování se stejnou
+  platnou polohou jako poslední dotyk.
+- Gesto bez jakékoli použitelné polohy neposílá do procesu žádný vstup.
+- Přijaté mouse reporty mají číselné souřadnice, neobsahují NaN.
+- Psaní zůstává vypnuté a terminál nezíská textový fokus.
+
+Výsledky: `.madlik/test-terminal-touch-results.json`. Testovací aplikace používá
+stejný terminálový protokol; samotná interaktivní relace Codex CLI na fyzickém
+iPhonu nebyla v rámci tohoto testu ověřena.

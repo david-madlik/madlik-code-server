@@ -665,11 +665,79 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/terminal/browser/x
  import type { IBuffer, ITerminalOptions, ITheme, Terminal as RawXtermTerminal, LogLevel as XtermLogLevel, IMarker as IXtermMarker } from '@xterm/xterm';
  import type { ISearchOptions, SearchAddon as SearchAddonType } from '@xterm/addon-search';
  import type { Unicode11Addon as Unicode11AddonType } from '@xterm/addon-unicode11';
-@@ -521,6 +522,7 @@ export class XtermTerminal extends Dispo
+@@ -50,6 +51,7 @@ import { isNumber } from '../../../../..
+ import { clamp } from '../../../../../base/common/numbers.js';
+ import { LayoutSettings } from '../../../../services/layout/browser/layoutService.js';
+ import { ILifecycleService } from '../../../../services/lifecycle/common/lifecycle.js';
++import { registerTerminalTouchCoordinates } from './terminalTouchCoordinates.js';
+ import { updateTerminalFontRendering } from './terminalFontRendering.js';
+ 
+ const enum RenderConstants {
+@@ -521,6 +523,8 @@ export class XtermTerminal extends Dispo
  
  		const ad = this._attachedDisposables;
  		ad.clear();
 +		ad.add(registerMobileKeyboardInput(this.raw.textarea));
++		ad.add(registerTerminalTouchCoordinates(this.raw.element));
  		ad.add(dom.addDisposableListener(this.raw.textarea, 'focus', () => this._setFocused(true)));
  		ad.add(dom.addDisposableListener(this.raw.textarea, 'blur', () => this._setFocused(false)));
  		ad.add(dom.addDisposableListener(this.raw.textarea, 'focusout', () => this._setFocused(false)));
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/terminal/browser/xterm/terminalTouchCoordinates.ts
+===================================================================
+--- /dev/null
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/terminal/browser/xterm/terminalTouchCoordinates.ts
+@@ -0,0 +1,54 @@
++/*---------------------------------------------------------------------------------------------
++ * Copyright (c) Madlik. All rights reserved.
++ * Licensed under the MIT License. See License.txt in the project root.
++ *--------------------------------------------------------------------------------------------*/
++
++import { addDisposableListener, getWindow } from '../../../../../base/browser/dom.js';
++import { DisposableStore, IDisposable } from '../../../../../base/common/lifecycle.js';
++
++type TouchGesture = Event & {
++	clientX?: number;
++	clientY?: number;
++	pageX?: number;
++	pageY?: number;
++};
++
++/**
++ * Compatibility adapter for @xterm/xterm 6.1.0-beta.304's internal gesture events.
++ * Its inertia CHANGE events omit coordinates, but MouseService encodes them as
++ * mouse reports. Keep inertia at the last real touch position; never send NaN.
++ * Scoped to the native terminal element; no dependency or DOM injection patches.
++ * Recheck these internal event names when upgrading xterm.
++ */
++export function registerTerminalTouchCoordinates(element: HTMLElement): IDisposable {
++	const disposables = new DisposableStore();
++	let lastPosition: { x: number; y: number } | undefined;
++	const position = (event: TouchGesture) => {
++		if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
++			return { x: event.clientX!, y: event.clientY! };
++		}
++		if (Number.isFinite(event.pageX) && Number.isFinite(event.pageY)) {
++			const window = getWindow(element);
++			return { x: event.pageX! - window.scrollX, y: event.pageY! - window.scrollY };
++		}
++		return undefined;
++	};
++	// Capture also covers non-bubbling gestures dispatched on the xterm screen.
++	disposables.add(addDisposableListener(element, '-xterm-gesturestart', (event: TouchGesture) => {
++		lastPosition = position(event);
++	}, true));
++	disposables.add(addDisposableListener(element, '-xterm-gesturechange', (event: TouchGesture) => {
++		const current = position(event);
++		if (current) { lastPosition = current; }
++		if (!lastPosition) {
++			event.preventDefault();
++			event.stopImmediatePropagation();
++			return;
++		}
++		if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
++			event.clientX = lastPosition.x;
++			event.clientY = lastPosition.y;
++		}
++	}, true));
++	return disposables;
++}

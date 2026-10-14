@@ -77,3 +77,20 @@ Přepnutí části vrací prohlížení. Deaktivace mobilu obnoví původní atr
 vstupů a standardní fokusování; stav se neukládá ani nesdílí s desktopem.
 Klávesnice operačního systému nemá spolehlivé webové API pro zjištění otevření:
 indikátor znamená povolené psaní. Vlastní iframe/webview vstupy nejsou pokryté.
+
+## Kompatibilita dotykového scrollování xterm
+
+Závislost `@xterm/xterm` 6.1.0-beta.304 vytváří při inerciální fázi dotykového
+scrollování události CHANGE bez clientX/clientY. Při zapnutém mouse reportingu
+(SGR, např. Codex CLI) se souřadnice změní na NaN a poškodí vstup aplikace.
+`terminalTouchCoordinates.ts` registruje capture listenery přímo na nativním
+terminálovém elementu. Pamatuje poslední platnou polohu každého gesta, doplní ji
+při inercii a zahodí gesto bez použitelné polohy. Existující platné souřadnice
+se zachovají. Umožňuje dál scrollovat uvnitř aplikace i s vypnutým psaním.
+
+Jde o dočasný adaptér na **interní** události `-xterm-gesturestart/change`,
+nikoli veřejné xterm API. Při aktualizaci xterm ověřit jejich názvy a odstranit
+adaptér, až opravu zajistí upstream. Neopravujeme node_modules ani distribuční
+soubory; adaptér se sestaví ze zdrojů společně s workbenchem.
+Regresní test používá raw-mode Python fixture s mouse reportingem v izolovaném
+náhledu, skutečná dotyková gesta přes CDP i explicitní událost bez souřadnic.

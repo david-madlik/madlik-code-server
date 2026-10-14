@@ -73,6 +73,7 @@ Pokud náhled běží jako dočasná služba `madlik-mobile-preview`, zastaví s
 ```sh
 node lib/vscode/node_modules/playwright/cli.js install chromium
 node madlik/test-mobile.mjs
+node madlik/test-terminal-touch.mjs
 ```
 
 Test běží pouze proti náhledu na localhostu a jeho fixture repozitáři. Výsledky a snímky

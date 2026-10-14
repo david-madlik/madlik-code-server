@@ -2,7 +2,7 @@
 
 Nasazeno 2026-10-14 namísto původního code-serveru.
 
-- Release: `/opt/madlik-code-server/releases/7a5b0a227b215d7422a4ba70f9b7e52dc2e755b4`.
+- Release: `/opt/madlik-code-server/releases/0a3499e4fb95dddf5d0e317cd91cd314b29f83a3`.
 - Běží stejná služba `code-server@david`, uživatel david, interní port `127.0.0.1:18101`.
 - Vlastní ExecStart je v `/etc/systemd/system/code-server@david.service.d/20-madlik-fork.conf`.
 - Služba používá Node dodaný v release a nezávisí na nvm ani vývojové pracovní kopii.
@@ -39,3 +39,14 @@ Předchozí systemd drop-in je v
 `/opt/madlik-code-server/backups/before-keyboard-20261014/20-madlik-fork.conf`.
 Pro návrat pouze k předchozímu forku obnovit tento drop-in, provést daemon-reload
 a restart služby; data editoru se neobnovují ze zálohy.
+
+## Oprava dotykového scrollování
+
+2026-10-14: opravené souřadnice inerciálních dotykových událostí xterm,
+aby při mouse reportingu do aplikace neodcházely sekvence s NaN.
+Před nasazením prošla rozšířená cílená typová kontrola, sestavení,
+regrese SGR 1006/1016 i celá sada mobilních a desktopových scénářů.
+Předchozí release `7a5b0a227b215d7422a4ba70f9b7e52dc2e755b4` zůstává zachovaný;
+předchozí drop-in je v
+`/opt/madlik-code-server/backups/before-touch-20261014/20-madlik-fork.conf`.
+Přístupové údaje a síťová konfigurace se nemění.
