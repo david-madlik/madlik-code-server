@@ -20,7 +20,16 @@ Systémový balíček, přístupové údaje a síťová konfigurace zůstávají
 - Spodní navigace: Soubory / Git / Editor / Terminál.
 - Soubory a Git používají původní sidebar přes celou pracovní plochu.
 - Otevření souboru nebo diffu přepne na Editor.
-- Terminál se při přepínání neruší. Pomocná řada nabízí Ctrl+C, Esc, Tab a šipky.
+- Terminál se při přepínání neruší. Pomocná řada nabízí Ctrl+C, Esc, Tab, šipky a úplně vpravo Enter.
+- Tlačítko `⌨` je stále ve spodní navigaci. Zapne psaní a zaměří poslední textové pole;
+  dalším klepnutím klávesnici zavře. Aktivní psaní je zvýrazněné.
+- Mobil začíná v režimu prohlížení: dotyk editoru, běžných vstupů workbenche nebo
+  terminálu neudrží textový fokus. Nejprve klepni na pole a pak na `⌨`.
+  Při přechodu mezi částmi se psaní znovu vypne, aby šlo obsah procházet bez klávesnice.
+  Terminálová pomocná tlačítka fungují i se zavřenou klávesnicí.
+- Přepínač řídí povolení textového fokusu, ne systémovou klávesnici přímo. Skrytí
+  klávesnice systémovým tlačítkem se nemusí odrazit ve zvýraznění; vlastní webview
+  rozšíření nejsou tímto řízením pokryté. Skutečné iOS chování je nutné ověřit na telefonu.
 - Tlačítko `⋯` nabízí automatický režim, ruční zapnutí/vypnutí a paletu příkazů.
 - V paletě jsou příkazy `Madlik Mobile: Automaticky`, `Zapnout` a `Vypnout`.
 - Ruční volba platí pro aktuální okno do obnovení stránky; neukládá se jako společné nastavení.

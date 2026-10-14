@@ -188,13 +188,14 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 ===================================================================
 --- /dev/null
 +++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/madlikMobile.contribution.ts
-@@ -0,0 +1,182 @@
+@@ -0,0 +1,208 @@
 +/*---------------------------------------------------------------------------------------------
 + * Copyright (c) Madlik. All rights reserved.
 + * Licensed under the MIT License. See License.txt in the project root.
 + *--------------------------------------------------------------------------------------------*/
 +
 +import './media/madlikMobile.css';
++import { getMobileKeyboard } from '../../../../base/browser/mobileKeyboard.js';
 +import { addDisposableListener } from '../../../../base/browser/dom.js';
 +import { mainWindow } from '../../../../base/browser/window.js';
 +import { isWeb } from '../../../../base/common/platform.js';
@@ -224,6 +225,9 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +	private readonly nav = mainWindow.document.createElement('nav');
 +	private readonly terminalKeys = mainWindow.document.createElement('div');
 +	private readonly buttons = new Map<Section, HTMLButtonElement>();
++	private typing = false;
++	private readonly keyboardButton = mainWindow.document.createElement('button');
++	private readonly keyboard = getMobileKeyboard(mainWindow);
 +	private previousSidebar: string | undefined;
 +	private previousPanel: string | undefined;
 +
@@ -243,7 +247,7 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +		this.terminalKeys.className = 'madlik-mobile-terminal-keys';
 +		this.terminalKeys.hidden = true;
 +		this.terminalKeys.setAttribute('aria-label', 'Terminálové klávesy');
-+		for (const [label, text] of [['Ctrl+C', '\u0003'], ['Esc', '\u001b'], ['Tab', '\t'], ['↑', '\u001b[A'], ['↓', '\u001b[B']]) {
++		for (const [label, text] of [['Ctrl+C', '\u0003'], ['Esc', '\u001b'], ['Tab', '\t'], ['↑', '\u001b[A'], ['↓', '\u001b[B'], ['Enter', '\r']]) {
 +			const key = mainWindow.document.createElement('button');
 +			key.type = 'button';
 +			key.textContent = label;
@@ -262,6 +266,21 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +			this.buttons.set(section, button);
 +			this._register(addDisposableListener(button, 'click', () => this.select(section)));
 +		}
++		this.keyboardButton.type = 'button';
++		this.keyboardButton.textContent = '⌨';
++		this.keyboardButton.dataset.action = 'keyboard';
++		this.nav.appendChild(this.keyboardButton);
++		// Preserve the current input when tapping navigation/keys, and avoid
++		// dismissing Safari's keyboard before the toggle handler runs.
++		this._register(addDisposableListener(this.nav, 'pointerdown', event => {
++			if (event.target instanceof mainWindow.HTMLButtonElement) { event.preventDefault(); }
++		}));
++		this._register(addDisposableListener(this.keyboardButton, 'click', () => {
++			this.typing = !this.typing;
++			if (this.typing) { this.keyboard.open(); }
++			else { this.keyboard.setTyping(false); }
++			this.resize();
++		}));
 +		const options = mainWindow.document.createElement('button');
 +		options.type = 'button';
 +		options.textContent = '⋯';
@@ -301,7 +320,7 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +		for (const section of this.buttons.keys()) {
 +			this._register(CommandsRegistry.registerCommand(`madlik.mobile.${section}`, () => { this.select(section); return this.queue; }));
 +		}
-+		this._register(toDisposable(() => { if (this.active) { this.layoutService.setMobileLayout(undefined); } }));
++		this._register(toDisposable(() => { this.keyboard.setActive(false); if (this.active) { this.layoutService.setMobileLayout(undefined); } }));
 +		this.updateMode();
 +	}
 +
@@ -309,6 +328,8 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +		const active = this.mode === 'on' || (this.mode === 'auto' && this.media.matches);
 +		if (active === this.active) { return; }
 +		this.active = active;
++		this.typing = false;
++		this.keyboard.setActive(active);
 +		this.generation++;
 +		this.nav.hidden = !active;
 +		this.layoutService.mainContainer.classList.toggle('madlik-mobile', active);
@@ -342,6 +363,8 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +			if (!this.active || generation !== this.generation) { return; }
 +			this.switching = true;
 +			try {
++				this.typing = false;
++				this.keyboard.setTyping(false);
 +				this.section = section;
 +				this.resize();
 +				if (section === 'files' || section === 'git') {
@@ -359,6 +382,9 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +	private resize(): void {
 +		if (!this.active) { return; }
 +		this.terminalKeys.hidden = this.section !== 'terminal';
++		this.keyboardButton.setAttribute('aria-pressed', String(this.typing));
++		this.keyboardButton.setAttribute('aria-label', this.typing ? 'Zavřít klávesnici' : 'Otevřít klávesnici');
++		this.keyboardButton.title = this.typing ? 'Zavřít klávesnici' : 'Otevřít klávesnici';
 +		for (const [section, button] of this.buttons) {
 +			button.setAttribute('aria-pressed', String(section === this.section));
 +		}
@@ -382,7 +408,7 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +	right: 0;
 +	z-index: 100;
 +	display: grid;
-+	grid-template-columns: repeat(4, minmax(0, 1fr)) 44px;
++	grid-template-columns: repeat(4, minmax(0, 1fr)) 44px 44px;
 +	gap: 4px;
 +	padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
 +	box-sizing: border-box;
@@ -395,7 +421,7 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +.monaco-workbench .madlik-mobile-terminal-keys {
 +	grid-column: 1 / -1;
 +	display: grid;
-+	grid-template-columns: repeat(5, minmax(0, 1fr));
++	grid-template-columns: repeat(6, minmax(0, 1fr));
 +	gap: 4px;
 +}
 +
@@ -480,3 +506,170 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/test/browser/workbenchTest
  
  	declare readonly _serviceBrand: undefined;
  
+Index: madlik-code-server/lib/vscode/src/vs/base/browser/mobileKeyboard.ts
+===================================================================
+--- /dev/null
++++ madlik-code-server/lib/vscode/src/vs/base/browser/mobileKeyboard.ts
+@@ -0,0 +1,82 @@
++/*---------------------------------------------------------------------------------------------
++ * Copyright (c) Madlik. All rights reserved.
++ * Licensed under the MIT License. See License.txt in the project root.
++ *--------------------------------------------------------------------------------------------*/
++
++import { addDisposableListener, getWindow } from './dom.js';
++import { DisposableStore, IDisposable, toDisposable } from '../common/lifecycle.js';
++
++// Window-local, transient state: never changes user settings or another client.
++class MobileKeyboard {
++	private active = false;
++	private typing = false;
++	private target: HTMLElement | undefined;
++	private readonly inputs = new Map<HTMLElement, string | null>();
++
++	register(input: HTMLElement): IDisposable {
++		this.inputs.set(input, input.getAttribute('inputmode'));
++		this.apply(input);
++		const listeners = new DisposableStore();
++		listeners.add(addDisposableListener(input, 'focus', event => {
++			this.target = input;
++			if (this.active && !this.typing) {
++				// inputmode is only a hint (notably on iOS). Reject focus as well,
++				// without changing native readonly state or cancelling scrolling.
++				event.stopImmediatePropagation();
++				input.blur();
++			}
++		}, true));
++		listeners.add(toDisposable(() => {
++			this.restore(input);
++			this.inputs.delete(input);
++			if (this.target === input) { this.target = undefined; }
++		}));
++		return listeners;
++	}
++
++	setActive(active: boolean): void {
++		this.active = active;
++		this.setTyping(false);
++	}
++
++	setTyping(typing: boolean): void {
++		this.typing = this.active && typing;
++		for (const input of this.inputs.keys()) { this.apply(input); }
++		if (this.active && !this.typing) {
++			for (const input of this.inputs.keys()) {
++				if (input.ownerDocument.activeElement === input) {
++					this.target = input;
++					input.blur();
++				}
++			}
++		}
++	}
++
++	open(): void {
++		this.setTyping(true);
++		// Must remain synchronous inside the button's user gesture for Safari.
++		if (this.target?.isConnected) { this.target.focus({ preventScroll: true }); }
++	}
++
++	private apply(input: HTMLElement): void {
++		if (this.active && !this.typing) { input.setAttribute('inputmode', 'none'); }
++		else { this.restore(input); }
++	}
++
++	private restore(input: HTMLElement): void {
++		const original = this.inputs.get(input);
++		if (original === null) { input.removeAttribute('inputmode'); }
++		else if (original !== undefined) { input.setAttribute('inputmode', original); }
++	}
++}
++
++const keyboards = new WeakMap<Window, MobileKeyboard>();
++export function getMobileKeyboard(window: Window): MobileKeyboard {
++	let keyboard = keyboards.get(window);
++	if (!keyboard) { keyboard = new MobileKeyboard(); keyboards.set(window, keyboard); }
++	return keyboard;
++}
++
++export function registerMobileKeyboardInput(input: HTMLElement): IDisposable {
++	return getMobileKeyboard(getWindow(input)).register(input);
++}
+Index: madlik-code-server/lib/vscode/src/vs/base/browser/ui/inputbox/inputBox.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/base/browser/ui/inputbox/inputBox.ts
++++ madlik-code-server/lib/vscode/src/vs/base/browser/ui/inputbox/inputBox.ts
+@@ -3,6 +3,7 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
++import { registerMobileKeyboardInput } from '../../mobileKeyboard.js';
+ import * as dom from '../../dom.js';
+ import * as cssJs from '../../cssValue.js';
+ import { DomEmitter } from '../../event.js';
+@@ -146,6 +147,7 @@ export class InputBox extends Widget {
+ 
+ 		const wrapper = dom.append(this.element, $('.ibwrapper'));
+ 		this.input = dom.append(wrapper, $(tagName + '.input.empty'));
++		this._register(registerMobileKeyboardInput(this.input));
+ 		this.input.setAttribute('autocorrect', 'off');
+ 		this.input.setAttribute('autocapitalize', 'off');
+ 		this.input.setAttribute('spellcheck', 'false');
+Index: madlik-code-server/lib/vscode/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
++++ madlik-code-server/lib/vscode/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
+@@ -3,6 +3,7 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
++import { registerMobileKeyboardInput } from '../../../../../base/browser/mobileKeyboard.js';
+ import './nativeEditContext.css';
+ import { isFirefox } from '../../../../../base/browser/browser.js';
+ import { addDisposableListener, getActiveElement, getWindow, getWindowId } from '../../../../../base/browser/dom.js';
+@@ -86,6 +87,7 @@ export class NativeEditContext extends A
+ 		super(context);
+ 
+ 		this.domNode = new FastDomNode(document.createElement('div'));
++		this._register(registerMobileKeyboardInput(this.domNode.domNode));
+ 		this.domNode.setClassName(`native-edit-context`);
+ 		this._imeTextArea = new FastDomNode(document.createElement('textarea'));
+ 		this._imeTextArea.setClassName(`ime-text-area`);
+Index: madlik-code-server/lib/vscode/src/vs/editor/browser/controller/editContext/textArea/textAreaEditContext.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/editor/browser/controller/editContext/textArea/textAreaEditContext.ts
++++ madlik-code-server/lib/vscode/src/vs/editor/browser/controller/editContext/textArea/textAreaEditContext.ts
+@@ -3,6 +3,7 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
++import { registerMobileKeyboardInput } from '../../../../../base/browser/mobileKeyboard.js';
+ import './textAreaEditContext.css';
+ import * as nls from '../../../../../nls.js';
+ import * as browser from '../../../../../base/browser/browser.js';
+@@ -178,6 +179,7 @@ export class TextAreaEditContext extends
+ 
+ 		// Text Area (The focus will always be in the textarea when the cursor is blinking)
+ 		this.textArea = createFastDomNode(document.createElement('textarea'));
++		this._register(registerMobileKeyboardInput(this.textArea.domNode));
+ 		PartFingerprints.write(this.textArea, PartFingerprint.TextArea);
+ 		this.textArea.setClassName(`inputarea ${MOUSE_CURSOR_TEXT_CSS_CLASS_NAME}`);
+ 		this.textArea.setAttribute('wrap', this._textAreaWrapping && !this._visibleTextArea ? 'on' : 'off');
+Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/terminal/browser/xterm/xtermTerminal.ts
+===================================================================
+--- madlik-code-server.orig/lib/vscode/src/vs/workbench/contrib/terminal/browser/xterm/xtermTerminal.ts
++++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/terminal/browser/xterm/xtermTerminal.ts
+@@ -3,6 +3,7 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
++import { registerMobileKeyboardInput } from '../../../../../base/browser/mobileKeyboard.js';
+ import type { IBuffer, ITerminalOptions, ITheme, Terminal as RawXtermTerminal, LogLevel as XtermLogLevel, IMarker as IXtermMarker } from '@xterm/xterm';
+ import type { ISearchOptions, SearchAddon as SearchAddonType } from '@xterm/addon-search';
+ import type { Unicode11Addon as Unicode11AddonType } from '@xterm/addon-unicode11';
+@@ -521,6 +522,7 @@ export class XtermTerminal extends Dispo
+ 
+ 		const ad = this._attachedDisposables;
+ 		ad.clear();
++		ad.add(registerMobileKeyboardInput(this.raw.textarea));
+ 		ad.add(dom.addDisposableListener(this.raw.textarea, 'focus', () => this._setFocused(true)));
+ 		ad.add(dom.addDisposableListener(this.raw.textarea, 'blur', () => this._setFocused(false)));
+ 		ad.add(dom.addDisposableListener(this.raw.textarea, 'focusout', () => this._setFocused(false)));

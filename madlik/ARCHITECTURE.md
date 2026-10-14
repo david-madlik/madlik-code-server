@@ -62,3 +62,18 @@ Playwright scénáře:
 
 Playwright není plnohodnotnou náhradou ověření iOS klávesnice a interaktivního Codex CLI
 na skutečném iPhonu. Finální dotykové a klávesnicové chování ověřit také na zařízení.
+
+## Řízení mobilní klávesnice
+
+Sdílený `base/browser/mobileKeyboard.ts` drží stav ve WeakMap podle okna.
+Nativní InputBox, oba editorové vstupy (textarea i NativeEditContext) a xterm
+registrují vlastní vstup přímo při vytvoření, s odregistrováním při dispose.
+Neprohledáváme DOM a nezasahujeme do readonly stavu editoru nebo terminálu.
+Prohlížení nastaví `inputmode=none` a synchronně odmítne textový fokus, protože
+samotný inputmode není na všech prohlížečích závazný. Poslední pokus o zaměření
+se pamatuje; tlačítko klávesnice obnoví atribut a focus synchronně v uživatelském
+gestu, což Safari potřebuje pro otevření softwarové klávesnice.
+Přepnutí části vrací prohlížení. Deaktivace mobilu obnoví původní atributy
+vstupů a standardní fokusování; stav se neukládá ani nesdílí s desktopem.
+Klávesnice operačního systému nemá spolehlivé webové API pro zjištění otevření:
+indikátor znamená povolené psaní. Vlastní iframe/webview vstupy nejsou pokryté.

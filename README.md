@@ -6,7 +6,9 @@ based on code-server **4.141.0 / VS Code 1.141.0**.
 On narrow browser windows (≤ 768 CSS pixels), switch between the native Explorer,
 Source Control, editor and terminal using a bottom navigation bar. Each section
 uses the available work area. The terminal also has touch buttons for Ctrl+C,
-Esc, Tab and arrow keys. Wider windows retain the standard desktop interface.
+Esc, Tab, arrow keys and Enter. A persistent keyboard button switches between
+browsing without text focus and typing. Switching sections returns to browsing.
+Wider windows retain the standard desktop interface.
 
 This changes the VS Code workbench through a small patch in the existing quilt
 stack. It is a custom distribution, **not a standalone VS Code extension**.

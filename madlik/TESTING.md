@@ -1,4 +1,4 @@
-# Ověření první implementace
+# Ověření mobilního rozhraní
 
 Datum: 2026-10-14. Základ: code-server 4.141.0 / VS Code 1.141.0.
 
@@ -14,6 +14,11 @@ Ověřeno:
   otevření souboru, nativní Git stage/unstage a diff, automatický přechod na Editor.
 - Terminál: spuštění foreground procesu a zachování shell PID přes přepnutí
   Soubory → Editor → Terminál. Proces se testuje ve fixture workspace.
+- Mobilní kontexty s `hasTouch` a `isMobile`: odmítnutí textového fokusu v editoru
+  a terminálu při prohlížení, povolení fokusu tlačítkem `⌨`, opětovné zavření,
+  terminálové Enter a Ctrl+C se zavřenou klávesnicí, dotyk terminálové plochy.
+- Standardní textový fokus palety příkazů na desktopu před mobilním režimem
+  a po jeho vypnutí; mobilní paleta funguje při povoleném psaní.
 - Ruční vypnutí/zapnutí, automatický režim a změna orientace přes hranici 768 px.
 - 1440 × 900: standardní desktop, nezměněná geometrie při souběžném mobilním
   klientovi a jeho reloadu, obnovení stejné geometrie po zúžení a opětovném rozšíření.
