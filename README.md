@@ -27,9 +27,11 @@ This is a custom code-server distribution, not a standalone VS Code extension.
 - The Code keyboard opens at the bottom, below navigation and terminal helpers,
   directly above the device safe area.
 - Editor and terminal panel title bars use two rows on mobile: actions aligned
-  right above the full-width native tab strip. Desktop retains its normal title bars.
+  right above the full-width native tab strip. Mobile terminal panel close/maximize
+  controls and the toolbar separator are hidden. Desktop retains its normal title bars.
 - Terminal helpers provide **Ctrl+C, Esc, Tab, Paste, ← ↓ ↑ → and Enter**. The four arrows
-  each use half a regular button's width; Enter stays on the far right. Arrows
+  are wider for touch, with compact Esc/Tab/Paste buttons; Ctrl+C and Enter retain
+  their full width, with Enter on the far right. Arrows
   and the keyboard toggle use VS Code's native Codicons with accessible labels.
 - Long-press terminal text to select a word. Drag the two handles to adjust the
   native xterm selection. **Copy** writes to the device clipboard, closes the menu

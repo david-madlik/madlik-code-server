@@ -1,11 +1,11 @@
 # Current VPS deployment and rollback
 
-Deployment date: **2026-10-14**. These paths describe the current development VPS;
+Deployment date: **2026-10-15**. These paths describe the current development VPS;
 they are not a portable installer or a Git commit ID.
 
 | Item | Current value |
 | --- | --- |
-| Release directory | `/opt/madlik-code-server/releases/57a6dc4c649bd400035f883efae73c5f56d34149` |
+| Release directory | `/opt/madlik-code-server/releases/ecd030e44847c8aa234409cfb43ee8bfb6259348` |
 | Service / user | `code-server@david` / `david` |
 | Backend listener | `127.0.0.1:18101` |
 | systemd override | `/etc/systemd/system/code-server@david.service.d/20-madlik-fork.conf` |
@@ -61,16 +61,16 @@ commit.
 
 ## Return to the preceding fork build
 
-Before the mobile browser color-scheme change, the systemd override was saved at:
+Before removing the duplicate mobile footer gap, the systemd override was saved at:
 
 ```text
-/opt/madlik-code-server/backups/before-browser-color-scheme-20261014/20-madlik-fork.conf
+/opt/madlik-code-server/backups/before-remove-double-footer-gap-20261015/20-madlik-fork.conf
 ```
 
 Restore that override, reload systemd and restart the service:
 
 ```sh
-sudo cp /opt/madlik-code-server/backups/before-browser-color-scheme-20261014/20-madlik-fork.conf /etc/systemd/system/code-server@david.service.d/20-madlik-fork.conf
+sudo cp /opt/madlik-code-server/backups/before-remove-double-footer-gap-20261015/20-madlik-fork.conf /etc/systemd/system/code-server@david.service.d/20-madlik-fork.conf
 sudo systemctl daemon-reload
 sudo systemctl restart code-server@david
 ```
@@ -118,3 +118,36 @@ HTML/JS diagnostic files were removed from that active release and from the sour
 repository. No diagnostic page, badge or clipboard-test URL switch remains in the
 active distribution. Regression-test scripts remain available. See
 [CLIPBOARD.md](CLIPBOARD.md) for investigation notes, which make no fix claim.
+
+## Wider terminal helper arrows
+
+The current release redistributes the existing 7fr terminal-helper row: Ctrl+C and
+Enter stay at 1fr, Esc/Tab/Paste use 0.75fr each, and four arrows use 0.6875fr each.
+At 390px viewport width, arrows grow from approximately 24.7px to 34px; at 375px,
+from 23.6px to 32.5px. Ctrl+C and Enter widths are unchanged. The capped build,
+isolated geometry comparison and screenshot inspection passed at both widths,
+including arrow centering. This CSS adjustment is included in the stabilized mobile UI checkpoint.
+
+## Mobile panel control cleanup
+
+The mobile stylesheet hides the panel global-actions container (close/maximize)
+and the terminal title-toolbar separator item. Existing terminal actions remain
+visible and align right. Desktop styles are unaffected. The capped build, preview
+checks at 375/390 and desktop style restoration passed; live HTTPS smoke checks
+also verify the controls/separator are hidden in the active terminal. This change
+and the wider-arrow adjustment are included in the stabilized mobile UI checkpoint.
+
+## Borderless mobile footer
+
+The mobile navigation container now has zero top and bottom borders. Its button
+styling is unchanged. Built and deployed directly at the owner's request without
+running visual or automated tests for this adjustment. The owner subsequently reported improved stability and requested a Git checkpoint.
+
+## Mobile footer top spacing
+
+The initial reduction from 6px to 4px did not resolve the spacing reported on
+the device. The floating workbench part already supplies a 4px bottom margin;
+footer top padding is now zero to avoid adding another gap. Footer rows retain
+their 4px gap, and side and safe-area bottom padding are unchanged. Built and
+deployed without running tests, as requested by the owner; the owner subsequently
+reported improved stability and requested a Git checkpoint.

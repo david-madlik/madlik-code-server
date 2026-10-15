@@ -548,7 +548,7 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 ===================================================================
 --- /dev/null
 +++ madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/browser/media/madlikMobile.css
-@@ -0,0 +1,326 @@
+@@ -0,0 +1,336 @@
 +.monaco-workbench .madlik-mobile-navigation {
 +	position: absolute;
 +	left: 0;
@@ -557,10 +557,12 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +	display: grid;
 +	grid-template-columns: repeat(4, minmax(0, 1fr)) 100px;
 +	gap: 4px;
-+	padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
++	/* The floating workbench part already supplies the 4px gap above this row. */
++	padding: 0 6px calc(6px + env(safe-area-inset-bottom, 0px));
 +	box-sizing: border-box;
 +	background: var(--vscode-sideBar-background);
-+	border-top: 1px solid var(--vscode-panel-border);
++	border-top: 0;
++	border-bottom: 0;
 +}
 +
 +.monaco-workbench .madlik-mobile-navigation[hidden] { display: none; }
@@ -568,7 +570,8 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +.monaco-workbench .madlik-mobile-terminal-keys {
 +	grid-column: 1 / -1;
 +	display: grid;
-+	grid-template-columns: repeat(4, minmax(0, 1fr)) repeat(4, minmax(0, 0.5fr)) minmax(0, 1fr);
++	/* Keep the total at 7fr so Ctrl+C and Enter retain their previous width. */
++	grid-template-columns: minmax(0, 1fr) repeat(3, minmax(0, 0.75fr)) repeat(4, minmax(0, 0.6875fr)) minmax(0, 1fr);
 +	gap: 4px;
 +}
 +
@@ -849,9 +852,8 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +	justify-self: end;
 +}
 +.monaco-workbench.madlik-mobile .part.panel > .title > .global-actions {
-+	grid-row: 1;
-+	grid-column: 3;
-+	align-self: center;
++	/* Closing/maximizing conflicts with the dedicated mobile Terminal section. */
++	display: none;
 +}
 +.monaco-workbench.madlik-mobile .part.panel > .title > .global-actions-left {
 +	grid-row: 1;
@@ -874,6 +876,14 @@ Index: madlik-code-server/lib/vscode/src/vs/workbench/contrib/madlikMobile/brows
 +.monaco-workbench .madlik-mobile-navigation button[data-section] .codicon {
 +	font-size: 24px;
 +	pointer-events: none;
++}
++
++.monaco-workbench .madlik-mobile-terminal-keys > button {
++	padding-inline: 3px;
++}
++
++.monaco-workbench.madlik-mobile .part.panel > .title > .title-actions .action-item:has(> .action-label.separator) {
++	display: none;
 +}
 Index: madlik-code-server/lib/vscode/src/vs/workbench/services/layout/browser/layoutService.ts
 ===================================================================
