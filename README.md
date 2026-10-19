@@ -8,6 +8,14 @@ on a phone, with one working section filling the available area and a touch-frie
 navigation bar. Windows wider than 768 CSS pixels retain the desktop layout.
 This is a custom code-server distribution, not a standalone VS Code extension.
 
+## Download and install
+
+Prebuilt Linux amd64 archives and SHA-256 checksums are available in
+[GitHub Releases](https://github.com/david-madlik/madlik-code-server/releases).
+They include Node.js and runtime dependencies, so the target server does not need
+to compile VS Code. See the [portable installation guide](madlik/PORTABLE.md)
+for requirements, installation and access over an SSH tunnel.
+
 ## Mobile controls
 
 - **Explorer / Git / Editor / Terminal** icons (with accessible labels) switch between native workbench sections.
@@ -65,8 +73,7 @@ editor shortcuts and extension webview inputs are not fully emulated; switch to
 Native when needed. Browser clipboard permissions and native iOS keyboard UI
 remain controlled by the browser/OS. The manual textarea dialog
 remains the fallback when direct clipboard reading is unavailable. Temporary
-manual diagnostic pages and A/B URL switches have been removed. No standalone
-release packages are published.
+manual diagnostic pages and A/B URL switches have been removed.
 
 ## Development
 

@@ -45,8 +45,9 @@ bash madlik/start-preview.sh
 
 Do not reapply patches to an already patched checkout; inspect `quilt applied`.
 The preview workflow reuses native runtime dependencies from the baseline
-installation. For a complete distribution build, follow the upstream
-[contributing guide](docs/CONTRIBUTING.md); no portable release package is provided yet.
+installation. To package the staged runtime for another Linux amd64 server without
+compiling there, see [PORTABLE.md](madlik/PORTABLE.md). For a complete distribution
+build, follow the upstream [contributing guide](docs/CONTRIBUTING.md).
 
 The build runs with a 4 GiB memory cap via user systemd and requires at least 6 GiB
 available RAM, including reserve. Do not run another compiler/typechecker alongside
